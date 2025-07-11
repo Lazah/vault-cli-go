@@ -17,9 +17,9 @@ type VaultClient struct {
 	authType      string
 	tokenCreds    *tokenAuth
 	ldapCreds     *ldapAuth
-	//userAuth      *userAuth
-	ctx          context.Context
-	sessionToken tokenInfo
+	userAuth      *userAuth
+	ctx           context.Context
+	sessionToken  tokenInfo
 }
 
 type ldapAuth struct {
@@ -30,10 +30,10 @@ type tokenAuth struct {
 	token string
 }
 
-// type userAuth struct {
-// 	username string
-// 	password string
-// }
+type userAuth struct {
+	username string
+	password string
+}
 
 func NewClient(baseUrl string) (*VaultClient, error) {
 	serverUrl, err := url.Parse(baseUrl)
@@ -61,8 +61,21 @@ func (c *VaultClient) Insecure() error {
 	if c.client == nil {
 		return fmt.Errorf("client should be initialized before calling this")
 	}
-
-	c.client.SetTLSClientConfig(&tls.Config{InsecureSkipVerify: true})
+	var origTlsConfig *tls.Config
+	origTransport, err := c.client.Transport()
+	if err != nil {
+		return err
+	}
+	if origTransport == nil {
+		origTlsConfig = new(tls.Config)
+	} else {
+		origTlsConfig = origTransport.TLSClientConfig
+	}
+	if origTlsConfig == nil {
+		origTlsConfig = new(tls.Config)
+	}
+	origTlsConfig.InsecureSkipVerify = true
+	c.client.SetTLSClientConfig(origTlsConfig)
 	return nil
 }
 
@@ -74,6 +87,19 @@ func (c *VaultClient) WithLdapAuth(username, password, mountPath string) error {
 	}
 	c.authType = "ldap"
 	c.ldapCreds = &ldapAuth{
+		username: username,
+		password: password,
+	}
+	return nil
+}
+func (c *VaultClient) WithUserAuth(username, password, mountPath string) error {
+	if mountPath != "" {
+		c.authMountPath = mountPath
+	} else {
+		c.authMountPath = "auth/userpass/"
+	}
+	c.authType = "userpass"
+	c.userAuth = &userAuth{
 		username: username,
 		password: password,
 	}
@@ -93,11 +119,16 @@ func (c *VaultClient) Authenticate() error {
 		c.sessionToken.token = c.tokenCreds.token
 		c.sessionToken.renew = false
 		c.sessionToken.exp = time.Now().Add(10 * time.Hour)
+	case "userpass":
+		err := c.authUser()
+		if err != nil {
+			return err
+		}
 	}
 	return nil
 }
 func (c *VaultClient) authLdap() error {
-	loginPath := fmt.Sprintf("%s/login/%s", c.authMountPath, c.ldapCreds.username)
+	loginPath := fmt.Sprintf("v1/%s/login/%s", c.authMountPath, c.ldapCreds.username)
 	body := map[string]string{
 		"password": c.ldapCreds.password,
 	}
@@ -109,16 +140,22 @@ func (c *VaultClient) authLdap() error {
 	req.Body = body
 	respData := new(LdapAuthRespBody)
 	req.SetResult(respData)
+	var reqError error
+	req.SetError(reqError)
 	resp, err := req.Post(fullUrl.String())
+	if err != nil {
+		return err
+	}
 	if resp.IsError() {
 		return resp.Error().(error)
 	}
 	c.sessionToken.token = respData.Auth.ClientToken
 	c.sessionToken.renew = respData.Auth.Renewable
-	tokenDur := time.Duration(respData.Auth.LeaseDuration)
+	tokenDur := time.Duration(respData.Auth.LeaseDuration * int64(time.Second))
 	tokenDur = tokenDur - (5 * time.Second)
 	tokenExp := time.Now().Add(tokenDur)
 	c.sessionToken.exp = tokenExp
+	c.client.SetAuthToken(respData.Auth.ClientToken)
 	return nil
 }
 
@@ -126,4 +163,36 @@ type tokenInfo struct {
 	token string
 	renew bool
 	exp   time.Time
+}
+
+func (c *VaultClient) authUser() error {
+	loginPath := fmt.Sprintf("v1/%slogin/%s", c.authMountPath, c.userAuth.username)
+	body := map[string]string{
+		"password": c.userAuth.password,
+	}
+	fullUrl, err := c.baseUrl.Parse(loginPath)
+	if err != nil {
+		return err
+	}
+	req := c.client.NewRequest()
+	req.Body = body
+	respData := new(UserpassAuthRespBody)
+	// var reqError error
+	req.SetResult(respData)
+	// req.SetError(reqError)
+	resp, err := req.Post(fullUrl.String())
+	if err != nil {
+		return err
+	}
+	if resp.IsError() {
+		return resp.Error().(error)
+	}
+	c.sessionToken.token = respData.Auth.ClientToken
+	c.sessionToken.renew = respData.Auth.Renewable
+	tokenDur := time.Duration(respData.Auth.LeaseDuration * int64(time.Second))
+	tokenDur = tokenDur - (5 * time.Second)
+	tokenExp := time.Now().Add(tokenDur)
+	c.sessionToken.exp = tokenExp
+	c.client.SetAuthToken(respData.Auth.ClientToken)
+	return nil
 }
