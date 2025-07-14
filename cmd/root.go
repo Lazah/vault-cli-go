@@ -1,15 +1,13 @@
 /*
 Copyright © 2025 Pentti Laitinen <pentti.laitinen@gmail.com>
-
 */
 package cmd
 
 import (
-	"fmt"
 	"os"
 
+	"github.com/Lazah/vault-cli-go/internal"
 	"github.com/spf13/cobra"
-	"github.com/spf13/viper"
 )
 
 var cfgFile string
@@ -54,24 +52,6 @@ func init() {
 
 // initConfig reads in config file and ENV variables if set.
 func initConfig() {
-	if cfgFile != "" {
-		// Use config file from the flag.
-		viper.SetConfigFile(cfgFile)
-	} else {
-		// Find home directory.
-		home, err := os.UserHomeDir()
-		cobra.CheckErr(err)
-
-		// Search config in home directory with name ".vault-cli-go" (without extension).
-		viper.AddConfigPath(home)
-		viper.SetConfigType("yaml")
-		viper.SetConfigName(".vault-cli-go")
-	}
-
-	viper.AutomaticEnv() // read in environment variables that match
-
-	// If a config file is found, read it in.
-	if err := viper.ReadInConfig(); err == nil {
-		fmt.Fprintln(os.Stderr, "Using config file:", viper.ConfigFileUsed())
-	}
+	internal.ReadConfig(cfgFile)
+	internal.SetupLogger()
 }

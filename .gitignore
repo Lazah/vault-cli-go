@@ -32,3 +32,8 @@ go.work.sum
 .idea/
 .vscode/
 .zed/
+
+#Config files
+*.yaml
+#Don't ignore trunk
+!.trunk/

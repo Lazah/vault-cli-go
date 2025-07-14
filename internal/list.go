@@ -2,16 +2,30 @@ package internal
 
 import (
 	"fmt"
+	"log/slog"
+	"os"
 
 	"github.com/Lazah/vault-cli-go/internal/vault"
+	"github.com/spf13/viper"
 )
 
 func ListSecrets() {
-	client, err := vault.NewClient("http://localhost:8200/")
+	logger := slog.Default()
+	var cfg ClientConfig
+	err := viper.Unmarshal(&cfg)
+	if err != nil {
+		logger.Error("an error occured while reading config", slog.String("error", err.Error()))
+		os.Exit(10)
+	}
+	if cfg.SrcVault == nil {
+		logger.Error("source vault info missing... terminating")
+		os.Exit(10)
+	}
+	client, err := vault.NewClient(cfg.SrcVault.BaseURL)
 	if err != nil {
 		fmt.Println(err.Error())
 	}
-	err = client.WithUserAuth("lana", "Password12#", "")
+	err = client.WithUserAuth(cfg.SrcVault.UserCreds.Username, cfg.SrcVault.UserCreds.Password, "")
 	if err != nil {
 		fmt.Println(err.Error())
 	}

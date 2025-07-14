@@ -3,6 +3,7 @@ package vault
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"strings"
 	"time"
@@ -107,6 +108,7 @@ func (k *Kv2Vault) GetSecretPaths(startPath string) chan string {
 }
 
 func (k *Kv2Vault) getSecretPathsFromPath(startPath string, respChan chan string) {
+	logger := slog.Default()
 	defer close(respChan)
 	folderChan := make(chan string, 1000)
 	folderChan <- startPath
@@ -114,7 +116,7 @@ func (k *Kv2Vault) getSecretPathsFromPath(startPath string, respChan chan string
 	for folder := range folderChan {
 		secrets, folders, err := k.listPath(folder)
 		if err != nil {
-			fmt.Println("failed to get secrets from path %s" + folder)
+			logger.Error("an error occured while listing path", slog.String("path", folder), slog.String("error", err.Error()))
 		}
 		if len(folders) == 0 && len(folderChan) == 0 {
 			close(folderChan)
