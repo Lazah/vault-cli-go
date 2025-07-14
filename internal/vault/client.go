@@ -16,21 +16,15 @@ type VaultClient struct {
 	authMountPath string
 	authType      string
 	tokenCreds    *tokenAuth
-	ldapCreds     *ldapAuth
-	userAuth      *userAuth
+	passwdCreds   *passwdAuth
 	ctx           context.Context
 	sessionToken  tokenInfo
-}
-
-type ldapAuth struct {
-	username string
-	password string
 }
 type tokenAuth struct {
 	token string
 }
 
-type userAuth struct {
+type passwdAuth struct {
 	username string
 	password string
 }
@@ -86,7 +80,7 @@ func (c *VaultClient) WithLdapAuth(username, password, mountPath string) error {
 		c.authMountPath = "auth/ldap/"
 	}
 	c.authType = "ldap"
-	c.ldapCreds = &ldapAuth{
+	c.passwdCreds = &passwdAuth{
 		username: username,
 		password: password,
 	}
@@ -99,7 +93,7 @@ func (c *VaultClient) WithUserAuth(username, password, mountPath string) error {
 		c.authMountPath = "auth/userpass/"
 	}
 	c.authType = "userpass"
-	c.userAuth = &userAuth{
+	c.passwdCreds = &passwdAuth{
 		username: username,
 		password: password,
 	}
@@ -128,9 +122,9 @@ func (c *VaultClient) Authenticate() error {
 	return nil
 }
 func (c *VaultClient) authLdap() error {
-	loginPath := fmt.Sprintf("v1/%s/login/%s", c.authMountPath, c.ldapCreds.username)
+	loginPath := fmt.Sprintf("v1/%s/login/%s", c.authMountPath, c.passwdCreds.username)
 	body := map[string]string{
-		"password": c.ldapCreds.password,
+		"password": c.passwdCreds.password,
 	}
 	fullUrl, err := c.baseUrl.Parse(loginPath)
 	if err != nil {
@@ -166,9 +160,9 @@ type tokenInfo struct {
 }
 
 func (c *VaultClient) authUser() error {
-	loginPath := fmt.Sprintf("v1/%slogin/%s", c.authMountPath, c.userAuth.username)
+	loginPath := fmt.Sprintf("v1/%slogin/%s", c.authMountPath, c.passwdCreds.username)
 	body := map[string]string{
-		"password": c.userAuth.password,
+		"password": c.passwdCreds.password,
 	}
 	fullUrl, err := c.baseUrl.Parse(loginPath)
 	if err != nil {
