@@ -2,7 +2,6 @@ package internal
 
 import (
 	"fmt"
-	"sync"
 
 	"github.com/Lazah/vault-cli-go/internal/vault"
 )
@@ -12,7 +11,7 @@ func ListSecrets() {
 	if err != nil {
 		fmt.Println(err.Error())
 	}
-	err = client.WithUserAuth("", "", "")
+	err = client.WithUserAuth("lana", "Password12#", "")
 	if err != nil {
 		fmt.Println(err.Error())
 	}
@@ -20,19 +19,13 @@ func ListSecrets() {
 	if err != nil {
 		fmt.Println(err.Error())
 	}
-	resultChan := make(chan string, 100)
-	folderChan := make(chan string, 100)
-	folderGroup := new(sync.WaitGroup)
-	folderChan <- ""
-	folderGroup.Add(2)
-	vault.StartPathHandlers(resultChan, folderChan, "secret", client, folderGroup)
-	go func() {
-		folderGroup.Wait()
-		close(folderChan)
-		close(resultChan)
-	}()
+	kv2Vault, err := client.NewKv2Vault("secret")
+	if err != nil {
+		fmt.Println(err.Error())
+	}
+	secretChan := kv2Vault.GetSecretPaths("")
 	paths := make([]string, 0)
-	for result := range resultChan {
+	for result := range secretChan {
 		paths = append(paths, result)
 	}
 

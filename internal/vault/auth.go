@@ -31,3 +31,15 @@ type userpassAuthData struct {
 	LeaseDuration int64             `json:"lease_duration,omitempty"`
 	Renewable     bool              `json:"renewable,omitempty"`
 }
+
+type TokenRenewResp struct {
+	Auth *tokenRenewData
+}
+
+type tokenRenewData struct {
+	ClientToken   string `json:"client_token,omitempty"`
+	Policies      []string
+	Metadata      map[string]string
+	LeaseDuration int64 `json:"lease_duration,omitempty"`
+	Renewable     bool
+}

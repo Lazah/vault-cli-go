@@ -5,11 +5,10 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
-	"sync"
 	"time"
 )
 
-func (c *VaultClient) ListPath(vaultMountPath, secretPath string) ([]string, []string, error) {
+func (k *Kv2Vault) listPath(secretPath string) ([]string, []string, error) {
 	pathParts := strings.Split(secretPath, "/")
 	escapedParts := make([]string, 0)
 	if len(pathParts) > 1 {
@@ -22,12 +21,17 @@ func (c *VaultClient) ListPath(vaultMountPath, secretPath string) ([]string, []s
 		}
 	}
 	escapedSecretPath := strings.Join(escapedParts, "/")
-	fullPath := fmt.Sprintf("v1/%s/metadata/%s", vaultMountPath, escapedSecretPath)
-	pathUrl, err := c.baseUrl.Parse(fullPath)
+	fullPath := fmt.Sprintf("%s%s", k.MetaDataPath, escapedSecretPath)
+	pathUrl, err := k.Client.baseUrl.Parse(fullPath)
 	if err != nil {
 		return nil, nil, err
 	}
-	req := c.client.NewRequest()
+	err = k.CheckToken()
+	if err != nil {
+		msg := fmt.Errorf("token check failed: %w", err)
+		return nil, nil, msg
+	}
+	req := k.Client.client.NewRequest()
 	resp, err := req.Execute("LIST", pathUrl.String())
 	if err != nil {
 		return nil, nil, err
@@ -80,35 +84,60 @@ func splitPaths(paths []string) ([]string, []string) {
 	return secrets, folders
 }
 
-func StartPathHandlers(resChan, folderChan chan string, vaultPath string, client *VaultClient, folderGroup *sync.WaitGroup) {
-	for range 2 {
-		go func() {
-			waitCount := 0
-		outer:
-			for {
-				select {
-				case folder := <-folderChan:
-					secrets, folders, err := client.ListPath(vaultPath, folder)
-					if err != nil {
-						fmt.Println(err.Error())
-					}
-					for _, v := range secrets {
-						resChan <- v
-					}
-					for _, v := range folders {
-						folderChan <- v
-					}
-					waitCount = 0
-				default:
-					if waitCount >= 3 {
+type Kv2Vault struct {
+	Client       *VaultClient
+	MountPath    string
+	MetaDataPath string
+	DataPath     string
+}
 
-						break outer
-					}
-					time.Sleep(100 * time.Millisecond)
-					waitCount++
-				}
-			}
-			folderGroup.Done()
-		}()
+func (c *VaultClient) NewKv2Vault(mountPath string) (*Kv2Vault, error) {
+	return &Kv2Vault{
+		Client:       c,
+		MountPath:    mountPath,
+		MetaDataPath: fmt.Sprintf("v1/%s/metadata/", mountPath),
+		DataPath:     fmt.Sprintf("v1/%s/data/", mountPath),
+	}, nil
+}
+
+func (k *Kv2Vault) GetSecretPaths(startPath string) chan string {
+	secretChan := make(chan string, 100)
+	go k.getSecretPathsFromPath(startPath, secretChan)
+	return secretChan
+}
+
+func (k *Kv2Vault) getSecretPathsFromPath(startPath string, respChan chan string) {
+	defer close(respChan)
+	folderChan := make(chan string, 1000)
+	folderChan <- startPath
+
+	for folder := range folderChan {
+		secrets, folders, err := k.listPath(folder)
+		if err != nil {
+			fmt.Println("failed to get secrets from path %s" + folder)
+		}
+		if len(folders) == 0 && len(folderChan) == 0 {
+			close(folderChan)
+		}
+		for _, folder := range folders {
+			folderChan <- folder
+		}
+		for _, secret := range secrets {
+			respChan <- secret
+		}
 	}
+
+}
+
+func (k *Kv2Vault) CheckToken() error {
+	guardTime := time.Now().Add(10 * time.Minute)
+	exp := k.Client.sessionToken.exp.Before(guardTime)
+	var err error
+	if exp {
+		err = k.Client.RenewCurrentToken()
+	}
+	if err != nil {
+		return err
+	}
+	return nil
 }

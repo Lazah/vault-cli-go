@@ -3,6 +3,7 @@ package vault
 import (
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"time"
@@ -188,5 +189,40 @@ func (c *VaultClient) authUser() error {
 	tokenExp := time.Now().Add(tokenDur)
 	c.sessionToken.exp = tokenExp
 	c.client.SetAuthToken(respData.Auth.ClientToken)
+	return nil
+}
+
+func (c *VaultClient) RenewCurrentToken() error {
+	renewUrl, err := c.baseUrl.Parse("v1/auth/token/renew-self")
+	if err != nil {
+		return err
+	}
+
+	req := c.client.NewRequest()
+	resp, err := req.Post(renewUrl.String())
+	if err != nil {
+		msg := fmt.Errorf("an error occured while renewing token: %w", err)
+		return msg
+	}
+	if resp.IsError() {
+		msg := fmt.Errorf("failed to renew  token: %s", resp.Status())
+		return msg
+	}
+	var tokenData *TokenRenewResp
+	err = json.Unmarshal(resp.Body(), tokenData)
+	if err != nil {
+		msg := fmt.Errorf("failed to parse token renew response: %w", err)
+		return msg
+	}
+	if tokenData == nil || tokenData.Auth == nil {
+		return fmt.Errorf("token was nil")
+	}
+	c.sessionToken.token = tokenData.Auth.ClientToken
+	c.sessionToken.renew = tokenData.Auth.Renewable
+	tokenDur := time.Duration(tokenData.Auth.LeaseDuration * int64(time.Second))
+	tokenDur = tokenDur - (5 * time.Second)
+	tokenExp := time.Now().Add(tokenDur)
+	c.sessionToken.exp = tokenExp
+	c.client.SetAuthToken(tokenData.Auth.ClientToken)
 	return nil
 }
