@@ -172,7 +172,7 @@ func getMetadataForPaths(
 	logger := slog.Default()
 	retVal := make(map[string][]int, 0)
 	for _, path := range sourcePaths {
-		metadata, err := srcVault.GetPathMetadata(path)
+		metadata, err := srcVault.GetSecretMetadata(path)
 		if err != nil {
 			logger.Error(
 				"failed to get metadata",

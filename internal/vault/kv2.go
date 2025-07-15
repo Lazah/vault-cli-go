@@ -39,7 +39,7 @@ func (k *Kv2Vault) listPath(secretPath string) ([]string, []string, error) {
 	if resp.IsError() {
 		return nil, nil, fmt.Errorf("request failed %s", resp.Status())
 	}
-	var respBody Kv2Resp
+	var respBody Kv2ListResponse
 	err = json.Unmarshal(resp.Body(), &respBody)
 	if err != nil {
 		return nil, nil, err
@@ -63,7 +63,6 @@ type Kv2Resp struct {
 	LeaseId       string         `json:"lease_id"`
 	Renewable     bool           `json:"renewable"`
 	LeaseDuration int            `json:"lease_duration"`
-	Data          map[string]any `json:"data"`
 	WrapInfo      map[string]any `json:"wrap_info"`
 	Warnings      map[string]any
 	Auth          map[string]any
@@ -119,7 +118,7 @@ func (k *Kv2Vault) GetSecretPaths(startPath string) chan string {
 func (k *Kv2Vault) getSecretPathsFromPath(startPath string, respChan chan string) {
 	logger := slog.Default()
 	defer close(respChan)
-	folderChan := make(chan string, 1000)
+	folderChan := make(chan string, 100)
 	folderChan <- startPath
 
 	for folder := range folderChan {
@@ -180,7 +179,7 @@ func (k *Kv2Vault) WriteSecret(path string, val map[string]string) error {
 	return nil
 }
 
-func (k *Kv2Vault) GetPathMetadata(path string) (*Kv2MetadataResp, error) {
+func (k *Kv2Vault) GetSecretMetadata(path string) (*Kv2MetadataResp, error) {
 	req := k.Client.client.NewRequest()
 	escapedPath := escapeRequestPath(path)
 	reqUrl, err := k.MetaDataUrl.Parse(escapedPath)
@@ -240,7 +239,8 @@ func (k *Kv2Vault) DeletSecret(path string) error {
 }
 
 type Kv2MetadataResp struct {
-	Data Kv2Metadata `json:"data"`
+	Kv2Resp
+	Data *Kv2Metadata `json:"data"`
 }
 type Kv2Metadata struct {
 	CasRequired        bool                     `json:"cas_required,omitempty"`
@@ -255,7 +255,8 @@ type Kv2Metadata struct {
 }
 
 type Kv2SecretResp struct {
-	Data Kv2SecretData
+	Kv2Resp
+	Data *Kv2SecretData
 }
 
 type Kv2SecretData struct {
@@ -282,4 +283,9 @@ func escapeRequestPath(reqPath string) string {
 	}
 	escapedPath := strings.Join(escapedParts, "/")
 	return escapedPath
+}
+
+type Kv2ListResponse struct {
+	Kv2Resp
+	Data map[string]any
 }
