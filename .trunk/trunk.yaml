@@ -20,11 +20,13 @@ runtimes:
       system_version: allowed
 # This is the section where you manage your linters. (https://docs.trunk.io/check/configuration)
 lint:
+  disabled:
+    - gofmt
   enabled:
-    - checkov@3.2.447
+    - golines@0.12.2
+    - checkov@3.2.451
     - git-diff-check
-    - gofmt@1.20.4
-    - golangci-lint2@2.2.1
+    - golangci-lint2@2.2.2
     - markdownlint@0.45.0
     - osv-scanner@2.0.3
     - prettier@3.6.2

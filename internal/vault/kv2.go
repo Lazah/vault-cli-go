@@ -22,8 +22,7 @@ func (k *Kv2Vault) listPath(secretPath string) ([]string, []string, error) {
 		}
 	}
 	escapedSecretPath := strings.Join(escapedParts, "/")
-	fullPath := fmt.Sprintf("%s%s", k.MetaDataPath, escapedSecretPath)
-	pathUrl, err := k.Client.baseUrl.Parse(fullPath)
+	pathUrl, err := k.MetaDataUrl.Parse(escapedSecretPath)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -86,18 +85,28 @@ func splitPaths(paths []string) ([]string, []string) {
 }
 
 type Kv2Vault struct {
-	Client       *VaultClient
-	MountPath    string
-	MetaDataPath string
-	DataPath     string
+	Client      *VaultClient
+	MountPath   string
+	MetaDataUrl *url.URL
+	DataUrl     *url.URL
 }
 
 func (c *VaultClient) NewKv2Vault(mountPath string) (*Kv2Vault, error) {
+	metadataPath := fmt.Sprintf("v1/%s/metadata/", mountPath)
+	dataPath := fmt.Sprintf("v1/%s/data/", mountPath)
+	metadataUrl, err := c.baseUrl.Parse(metadataPath)
+	if err != nil {
+		return nil, err
+	}
+	dataUrl, err := c.baseUrl.Parse(dataPath)
+	if err != nil {
+		return nil, err
+	}
 	return &Kv2Vault{
-		Client:       c,
-		MountPath:    mountPath,
-		MetaDataPath: fmt.Sprintf("v1/%s/metadata/", mountPath),
-		DataPath:     fmt.Sprintf("v1/%s/data/", mountPath),
+		Client:      c,
+		MountPath:   mountPath,
+		MetaDataUrl: metadataUrl,
+		DataUrl:     dataUrl,
 	}, nil
 }
 
@@ -116,7 +125,11 @@ func (k *Kv2Vault) getSecretPathsFromPath(startPath string, respChan chan string
 	for folder := range folderChan {
 		secrets, folders, err := k.listPath(folder)
 		if err != nil {
-			logger.Error("an error occured while listing path", slog.String("path", folder), slog.String("error", err.Error()))
+			logger.Error(
+				"an error occured while listing path",
+				slog.String("path", folder),
+				slog.String("error", err.Error()),
+			)
 		}
 		if len(folders) == 0 && len(folderChan) == 0 {
 			close(folderChan)
@@ -133,13 +146,140 @@ func (k *Kv2Vault) getSecretPathsFromPath(startPath string, respChan chan string
 
 func (k *Kv2Vault) CheckToken() error {
 	guardTime := time.Now().Add(10 * time.Minute)
-	exp := k.Client.sessionToken.exp.Before(guardTime)
+	expired := k.Client.sessionToken.exp.Before(guardTime)
 	var err error
-	if exp {
+	if expired {
 		err = k.Client.RenewCurrentToken()
 	}
 	if err != nil {
 		return err
 	}
 	return nil
+}
+
+func (k *Kv2Vault) WriteSecret(path string, val map[string]string) error {
+	req := k.Client.client.NewRequest()
+	escapedPath := escapeRequestPath(path)
+	reqUrl, err := k.DataUrl.Parse(escapedPath)
+	if err != nil {
+		msg := fmt.Errorf("couldn't parse path %q: %w", escapedPath, err)
+		return msg
+	}
+	reqBody := make(map[string]any, 0)
+	reqBody["data"] = val
+	req.SetBody(reqBody)
+	resp, err := req.Post(reqUrl.String())
+	if err != nil {
+		msg := fmt.Errorf("an error occured while writing secret data: %w", err)
+		return msg
+	}
+	if resp.IsError() {
+		msg := fmt.Errorf("secret write failed with status %q", resp.Status())
+		return msg
+	}
+	return nil
+}
+
+func (k *Kv2Vault) GetPathMetadata(path string) (*Kv2MetadataResp, error) {
+	req := k.Client.client.NewRequest()
+	escapedPath := escapeRequestPath(path)
+	reqUrl, err := k.MetaDataUrl.Parse(escapedPath)
+	if err != nil {
+		msg := fmt.Errorf("couldn't parse request path %q:%w", escapedPath, err)
+		return nil, msg
+	}
+	var respBody Kv2MetadataResp
+	resp, err := req.Get(reqUrl.String())
+	if err != nil {
+		msg := fmt.Errorf(
+			"an error occured while getting metadata for path %q: %w",
+			reqUrl.String(),
+			err,
+		)
+		return nil, msg
+	}
+	if resp.IsError() {
+		msg := fmt.Errorf("request failed with status %q", resp.Status())
+		return nil, msg
+	}
+	err = json.Unmarshal(resp.Body(), &respBody)
+	if err != nil {
+		msg := fmt.Errorf("failed to parse response: %w", err)
+		return nil, msg
+	}
+	return &respBody, nil
+}
+func (k *Kv2Vault) GetSecretVersion(path string, version int) (*Kv2SecretResp, error) {
+	req := k.Client.client.NewRequest()
+	escapedPath := escapeRequestPath(path)
+	fullPath := fmt.Sprintf("%s?version=%d", escapedPath, version)
+	reqUrl, err := k.DataUrl.Parse(fullPath)
+	if err != nil {
+		msg := fmt.Errorf("couldn't parse path %q: %w", fullPath, err)
+		return nil, msg
+	}
+	resp, err := req.Get(reqUrl.String())
+	if err != nil {
+		msg := fmt.Errorf("an error occured while reading secret data: %w", err)
+		return nil, msg
+	}
+	if resp.IsError() {
+		msg := fmt.Errorf("secret read failed with status %q", resp.Status())
+		return nil, msg
+	}
+	respBody := new(Kv2SecretResp)
+	err = json.Unmarshal(resp.Body(), respBody)
+	if err != nil {
+		msg := fmt.Errorf("failed to parse secret data response: %w", err)
+		return nil, msg
+	}
+	return respBody, nil
+}
+func (k *Kv2Vault) DeletSecret(path string) error {
+	return nil
+}
+
+type Kv2MetadataResp struct {
+	Data Kv2Metadata `json:"data"`
+}
+type Kv2Metadata struct {
+	CasRequired        bool                     `json:"cas_required,omitempty"`
+	CreatedTime        string                   `json:"created_time,omitempty"`
+	CurrentVersion     int                      `json:"current_version,omitempty"`
+	DeleteVersionAfter string                   `json:"delete_version_after,omitempty"`
+	MaxVersions        int                      `json:"max_versions,omitempty"`
+	OldestVersion      int                      `json:"oldest_version,omitempty"`
+	UpdatedTime        string                   `json:"updated_time,omitempty"`
+	CustomMetadata     map[string]string        `json:"custom_metadata,omitempty"`
+	Versions           map[string]SecretVersion `json:"versions,omitempty"`
+}
+
+type Kv2SecretResp struct {
+	Data Kv2SecretData
+}
+
+type Kv2SecretData struct {
+	Data     map[string]string
+	Metadata map[string]any
+}
+type SecretVersion struct {
+	CreatedTime  string `json:"created_time,omitempty"`
+	DeletionTime string `json:"deletion_time,omitempty"`
+	Destroyed    bool
+}
+
+func escapeRequestPath(reqPath string) string {
+	pathParts := strings.Split(reqPath, "/")
+	escapedParts := make([]string, 0)
+	if len(pathParts) > 0 {
+		for _, v := range pathParts {
+			if len(v) == 0 {
+				continue
+			}
+			temp := url.PathEscape(v)
+			escapedParts = append(escapedParts, temp)
+		}
+	}
+	escapedPath := strings.Join(escapedParts, "/")
+	return escapedPath
 }
