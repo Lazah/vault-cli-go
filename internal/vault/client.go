@@ -226,3 +226,22 @@ func (c *VaultClient) RenewCurrentToken() error {
 	c.client.SetAuthToken(tokenData.Auth.ClientToken)
 	return nil
 }
+
+func (c *VaultClient) RevokeToken() error {
+	revokeUrl, err := c.baseUrl.Parse("v1/auth/token/revoke-self")
+	if err != nil {
+		return err
+	}
+
+	req := c.client.NewRequest()
+	resp, err := req.Post(revokeUrl.String())
+	if err != nil {
+		msg := fmt.Errorf("an error occured while revoking token: %w", err)
+		return msg
+	}
+	if resp.IsError() {
+		msg := fmt.Errorf("failed to revoke  token: %s", resp.Status())
+		return msg
+	}
+	return nil
+}

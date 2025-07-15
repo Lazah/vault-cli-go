@@ -52,6 +52,14 @@ func CopySecrets(inputParams CopyParams) {
 	}
 	close(versionChan)
 	copierGroup.Wait()
+	err = srcVaultClient.RevokeToken()
+	if err != nil {
+		logger.Warn("failed to revoke session token for source vault")
+	}
+	err = dstVaultClient.RevokeToken()
+	if err != nil {
+		logger.Warn("failed to revoke session token for destination vault")
+	}
 }
 
 func initVaultClients() (*vault.VaultClient, *vault.VaultClient, error) {
@@ -71,10 +79,12 @@ func initVaultClients() (*vault.VaultClient, *vault.VaultClient, error) {
 		msg := fmt.Errorf("failed to initialize source vault client: %w", err)
 		return nil, nil, msg
 	}
+	var dstClient *vault.VaultClient
 	if cfg.DstVault == nil {
-		return srcClient, srcClient, nil
+		dstClient, err = performVaultAuth(cfg.SrcVault)
+	} else {
+		dstClient, err = performVaultAuth(cfg.DstVault)
 	}
-	dstClient, err := performVaultAuth(cfg.DstVault)
 	if err != nil {
 		msg := fmt.Errorf("failed to initialize destination vault client: %w", err)
 		return nil, nil, msg
