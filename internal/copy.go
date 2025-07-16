@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/Lazah/vault-cli-go/internal/vault"
@@ -35,18 +36,21 @@ func CopySecrets(inputParams CopyParams) {
 	if err != nil {
 		logger.Error("failed to initialize destination vault", slog.String("error", err.Error()))
 	}
-	srcPathChan := srcVault.GetSecretPaths(inputParams.SrcPath)
+	srcPath := strings.Trim(inputParams.SrcPath, "/")
+	srcPathChan := srcVault.GetSecretPaths(srcPath)
 	sourcePaths := make([]string, 0)
 	for path := range srcPathChan {
 		sourcePaths = append(sourcePaths, path)
 	}
 	pathVersions := getMetadataForPaths(sourcePaths, inputParams.Versions, *srcVault)
 	versionChan, copierGroup := startSecretCopiers(srcVault, dstVault)
+	dstPath := strings.Trim(inputParams.DstPath, "/")
 	for path, versions := range pathVersions {
+		trimmedPath := strings.TrimPrefix(path, srcPath)
 		versionInfo := &SecretVersionsToCopy{
 			origPath: path,
 			versions: versions,
-			newPath:  fmt.Sprintf("%s%s", inputParams.DstPath, path),
+			newPath:  fmt.Sprintf("%s%s", dstPath, trimmedPath),
 		}
 		versionChan <- versionInfo
 	}
@@ -226,6 +230,7 @@ func filterDeletedSecretVersions(versions map[string]vault.SecretVersion) []int 
 				"failed to convert version number to int",
 				slog.String("number", versionNumber),
 			)
+			continue
 		}
 		retVal = append(retVal, number)
 	}

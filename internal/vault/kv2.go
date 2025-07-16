@@ -102,7 +102,7 @@ func (c *VaultClient) NewKv2Vault(mountPath string) (*Kv2Vault, error) {
 
 func (k *Kv2Vault) GetSecretPaths(startPath string) chan string {
 	secretChan := make(chan string, 100)
-	pathChan := make(chan string, 500)
+	pathChan := make(chan string, 1000)
 	pathGroup := new(sync.WaitGroup)
 	pathGroup.Add(2)
 	pathChan <- startPath
@@ -146,7 +146,7 @@ pathLookup:
 			}
 			loopCounter = 0
 		default:
-			if loopCounter > 10 {
+			if loopCounter >= 10 {
 				cancel()
 				logger.Debug("terminating path processor as no work is queued for 10 cycles")
 				break pathLookup
@@ -308,16 +308,15 @@ type SecretVersion struct {
 }
 
 func escapeRequestPath(reqPath string) string {
-	pathParts := strings.Split(reqPath, "/")
+	path := strings.TrimPrefix(reqPath, "/")
+	pathParts := strings.Split(path, "/")
 	escapedParts := make([]string, 0)
-	if len(pathParts) > 0 {
-		for _, v := range pathParts {
-			if len(v) == 0 {
-				continue
-			}
-			temp := url.PathEscape(v)
-			escapedParts = append(escapedParts, temp)
+	for _, v := range pathParts {
+		if len(v) == 0 {
+			continue
 		}
+		temp := url.PathEscape(v)
+		escapedParts = append(escapedParts, temp)
 	}
 	escapedPath := strings.Join(escapedParts, "/")
 	return escapedPath
