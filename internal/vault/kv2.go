@@ -104,9 +104,10 @@ func (k *Kv2Vault) GetSecretPaths(startPath string) chan string {
 	secretChan := make(chan string, 100)
 	pathChan := make(chan string, 1000)
 	pathGroup := new(sync.WaitGroup)
-	pathGroup.Add(2)
+	processorCount := 2
+	pathGroup.Add(processorCount)
 	pathChan <- startPath
-	for range 2 {
+	for range processorCount {
 		go k.getSecretPathsFromPath(secretChan, pathChan, pathGroup)
 	}
 	go k.closePathLookupChans(secretChan, pathChan, pathGroup)
