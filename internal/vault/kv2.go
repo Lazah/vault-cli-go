@@ -107,7 +107,7 @@ func (k *Kv2Vault) GetSecretPaths(startPath string) chan string {
 func (k *Kv2Vault) getSecretPathsFromPath(startPath string, respChan chan string) {
 	logger := slog.Default()
 	defer close(respChan)
-	folderChan := make(chan string, 100)
+	folderChan := make(chan string, 500)
 	folderChan <- startPath
 
 	for folder := range folderChan {
