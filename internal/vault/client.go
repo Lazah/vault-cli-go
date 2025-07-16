@@ -213,8 +213,11 @@ func (c *VaultClient) RenewCurrentToken() error {
 		msg := fmt.Errorf("failed to parse token renew response: %w", err)
 		return msg
 	}
-	if tokenData == nil || tokenData.Auth == nil {
-		return fmt.Errorf("token was nil")
+	if tokenData == nil {
+		return fmt.Errorf("token response was nil")
+	}
+	if tokenData.Auth == nil {
+		return fmt.Errorf("token data was nil")
 	}
 	c.sessionToken.token = tokenData.Auth.ClientToken
 	c.sessionToken.renew = tokenData.Auth.Renewable

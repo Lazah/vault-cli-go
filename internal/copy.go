@@ -25,15 +25,36 @@ type CopyParams struct {
 
 func CopySecrets(inputParams CopyParams) {
 	logger := slog.Default()
-	logger.Info("initializing vault clients")
-	srcVaultClient, dstVaultClient, err := initCopyVaultClients()
+	var cfg ClientConfig
+	err := viper.Unmarshal(&cfg)
 	if err != nil {
-		logger.Error("failed to initialize clients for key copy", slog.String("error", err.Error()))
+		logger.Error("failed to parse config", slog.String("error", err.Error()))
+		os.Exit(10)
 	}
-	logger.Info("initializing source vault")
+	if cfg.SrcVault == nil {
+		logger.Error("can't perform operation as vault client config is missing")
+		os.Exit(10)
+	}
+	srcVaultClient, err := initVaultClient(cfg.SrcVault)
+	if err != nil {
+		logger.Error("failed to initialize vault client", slog.String("error", err.Error()))
+		os.Exit(10)
+	}
 	srcVault, err := srcVaultClient.NewKv2Vault(inputParams.SrcMountPath)
 	if err != nil {
-		logger.Error("failed to initialize source vault", slog.String("error", err.Error()))
+		logger.Error("failed to initialize kv store", slog.String("path", inputParams.SrcMountPath))
+		os.Exit(10)
+	}
+	logger.Info("initializing destination vault client")
+	var dstVaultClient *vault.VaultClient
+	if cfg.DstVault == nil {
+		dstVaultClient, err = initVaultClient(cfg.SrcVault)
+	} else {
+		dstVaultClient, err = initVaultClient(cfg.DstVault)
+	}
+	if err != nil {
+		logger.Error("failed to initialize vault client", slog.String("error", err.Error()))
+		os.Exit(10)
 	}
 	dstVault, err := dstVaultClient.NewKv2Vault(inputParams.DstMountPath)
 	if err != nil {
@@ -76,118 +97,6 @@ func CopySecrets(inputParams CopyParams) {
 	if err != nil {
 		logger.Warn("failed to revoke session token for destination vault")
 	}
-}
-
-func initCopyVaultClients() (*vault.VaultClient, *vault.VaultClient, error) {
-	var cfg ClientConfig
-	err := viper.Unmarshal(&cfg)
-	if err != nil {
-		msg := fmt.Errorf("couldn't unmarshal config: %w", err)
-		return nil, nil, msg
-	}
-	if cfg.SrcVault == nil {
-		msg := fmt.Errorf("source vault config was empty")
-		return nil, nil, msg
-	}
-
-	srcClient, err := performVaultAuth(cfg.SrcVault)
-	if err != nil {
-		msg := fmt.Errorf("failed to initialize source vault client: %w", err)
-		return nil, nil, msg
-	}
-	var dstClient *vault.VaultClient
-	if cfg.DstVault == nil {
-		dstClient, err = performVaultAuth(cfg.SrcVault)
-	} else {
-		dstClient, err = performVaultAuth(cfg.DstVault)
-	}
-	if err != nil {
-		msg := fmt.Errorf("failed to initialize destination vault client: %w", err)
-		return nil, nil, msg
-	}
-
-	return srcClient, dstClient, nil
-}
-
-func performVaultAuth(vaultConfig *VaultInstance) (*vault.VaultClient, error) {
-	switch vaultConfig.AuthType {
-	case "ldap":
-		vaultClient, err := vault.NewClient(vaultConfig.BaseURL)
-		if err != nil {
-			msg := fmt.Errorf(
-				"couldn't initialize vault client with base url %q: %w",
-				vaultConfig.BaseURL,
-				err,
-			)
-			return nil, msg
-		}
-		err = vaultClient.WithLdapAuth(
-			vaultConfig.UserCreds.Username,
-			vaultConfig.UserCreds.Password,
-			"",
-		)
-		if err != nil {
-			msg := fmt.Errorf("couldn't set ldap as auth method for vault %w", err)
-			return nil, msg
-		}
-		if vaultConfig.Insecure {
-			err = vaultClient.Insecure()
-		}
-		if err != nil {
-			msg := fmt.Errorf("an error occured while setting connection to insecure: %w", err)
-			return nil, msg
-		}
-		err = vaultClient.Authenticate()
-		if err != nil {
-			msg := fmt.Errorf("authentication to vault failed: %w", err)
-			return nil, msg
-		}
-		return vaultClient, nil
-	case "token":
-		vaultClient, err := vault.NewClient(vaultConfig.BaseURL)
-		if err != nil {
-			msg := fmt.Errorf(
-				"couldn't initialize vault client with base url %q: %w",
-				vaultConfig.BaseURL,
-				err,
-			)
-			return nil, msg
-		}
-		err = vaultClient.WithTokenAuth(vaultConfig.TokenCreds.Token)
-		if err != nil {
-			msg := fmt.Errorf("failed to set token auth for vault client: %w", err)
-			return nil, msg
-		}
-		return vaultClient, nil
-
-	case "userpass":
-		vaultClient, err := vault.NewClient(vaultConfig.BaseURL)
-		if err != nil {
-			msg := fmt.Errorf(
-				"couldn't initialize vault client with base url %q: %w",
-				vaultConfig.BaseURL,
-				err,
-			)
-			return nil, msg
-		}
-		err = vaultClient.WithUserAuth(
-			vaultConfig.UserCreds.Username,
-			vaultConfig.UserCreds.Password,
-			"",
-		)
-		if err != nil {
-			msg := fmt.Errorf("failed to configure userpass auth to client: %w", err)
-			return nil, msg
-		}
-		err = vaultClient.Authenticate()
-		if err != nil {
-			msg := fmt.Errorf("failed to perform userpass auth to vault: %w", err)
-			return nil, msg
-		}
-		return vaultClient, nil
-	}
-	err := fmt.Errorf("unsupported auth type defined for vault: %q", vaultConfig.AuthType)
-	return nil, err
 }
 
 func startMetadataReaders(
