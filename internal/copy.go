@@ -22,7 +22,7 @@ type CopyParams struct {
 func CopySecrets(inputParams CopyParams) {
 	logger := slog.Default()
 	logger.Info("initializing vault clients")
-	srcVaultClient, dstVaultClient, err := initVaultClients()
+	srcVaultClient, dstVaultClient, err := initCopyVaultClients()
 	if err != nil {
 		logger.Error("failed to initialize clients for key copy", slog.String("error", err.Error()))
 	}
@@ -62,7 +62,7 @@ func CopySecrets(inputParams CopyParams) {
 	}
 }
 
-func initVaultClients() (*vault.VaultClient, *vault.VaultClient, error) {
+func initCopyVaultClients() (*vault.VaultClient, *vault.VaultClient, error) {
 	var cfg ClientConfig
 	err := viper.Unmarshal(&cfg)
 	if err != nil {

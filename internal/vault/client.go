@@ -109,7 +109,6 @@ func (c *VaultClient) Authenticate() error {
 			return err
 		}
 	case "token":
-		c.client.HeaderAuthorizationKey = "X-Vault-Token"
 		c.client.SetAuthToken(c.tokenCreds.token)
 		c.sessionToken.token = c.tokenCreds.token
 		c.sessionToken.renew = false

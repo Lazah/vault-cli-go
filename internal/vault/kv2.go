@@ -10,18 +10,7 @@ import (
 )
 
 func (k *Kv2Vault) listPath(secretPath string) ([]string, []string, error) {
-	pathParts := strings.Split(secretPath, "/")
-	escapedParts := make([]string, 0)
-	if len(pathParts) > 1 {
-		for _, v := range pathParts {
-			if len(v) == 0 {
-				continue
-			}
-			temp := url.PathEscape(v)
-			escapedParts = append(escapedParts, temp)
-		}
-	}
-	escapedSecretPath := strings.Join(escapedParts, "/")
+	escapedSecretPath := escapeRequestPath(secretPath)
 	pathUrl, err := k.MetaDataUrl.Parse(escapedSecretPath)
 	if err != nil {
 		return nil, nil, err
@@ -235,6 +224,22 @@ func (k *Kv2Vault) GetSecretVersion(path string, version int) (*Kv2SecretResp, e
 	return respBody, nil
 }
 func (k *Kv2Vault) DeletSecret(path string) error {
+	escapedPath := escapeRequestPath(path)
+	reqUrl, err := k.MetaDataUrl.Parse(escapedPath)
+	if err != nil {
+		msg := fmt.Errorf("couldn't parse requested path '%s': %w", escapedPath, err)
+		return msg
+	}
+	req := k.Client.client.NewRequest()
+	resp, err := req.Delete(reqUrl.String())
+	if err != nil {
+		msg := fmt.Errorf("an error occured while processing request: %w", err)
+		return msg
+	}
+	if resp.IsError() {
+		err := fmt.Errorf("failed to delete secret: '%s'", resp.Status())
+		return err
+	}
 	return nil
 }
 
