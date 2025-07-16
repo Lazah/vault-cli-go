@@ -1,12 +1,15 @@
 package internal
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/Lazah/vault-cli-go/internal/vault"
 	"github.com/spf13/viper"
@@ -42,14 +45,23 @@ func CopySecrets(inputParams CopyParams) {
 	for path := range srcPathChan {
 		sourcePaths = append(sourcePaths, path)
 	}
-	pathVersions := getMetadataForPaths(sourcePaths, inputParams.Versions, *srcVault)
+	secretPathChan, metadataChan := startMetadataReaders(srcVault, inputParams.Versions)
+	go sendDataToChan(sourcePaths, secretPathChan)
+	secretVersions, err := collectResults(metadataChan)
+	if err != nil {
+		logger.Error(
+			"an error occured while collecting metadata",
+			slog.String("error", err.Error()),
+		)
+		os.Exit(10)
+	}
 	versionChan, copierGroup := startSecretCopiers(srcVault, dstVault)
 	dstPath := strings.Trim(inputParams.DstPath, "/")
-	for path, versions := range pathVersions {
-		trimmedPath := strings.TrimPrefix(path, srcPath)
+	for _, secretVersion := range secretVersions {
+		trimmedPath := strings.TrimPrefix(secretVersion.secretPath, srcPath)
 		versionInfo := &SecretVersionsToCopy{
-			origPath: path,
-			versions: versions,
+			origPath: secretVersion.secretPath,
+			versions: secretVersion.versions,
 			newPath:  fmt.Sprintf("%s%s", dstPath, trimmedPath),
 		}
 		versionChan <- versionInfo
@@ -178,33 +190,107 @@ func performVaultAuth(vaultConfig *VaultInstance) (*vault.VaultClient, error) {
 	return nil, err
 }
 
-func getMetadataForPaths(
-	sourcePaths []string,
-	versionCount int,
-	srcVault vault.Kv2Vault,
-) map[string][]int {
-	logger := slog.Default()
-	retVal := make(map[string][]int, 0)
-	for _, path := range sourcePaths {
-		metadata, err := srcVault.GetSecretMetadata(path)
-		if err != nil {
-			logger.Error(
-				"failed to get metadata",
-				slog.String("path", path),
-				slog.String("error", err.Error()),
-			)
-			continue
-		}
-		if versionCount == 1 {
-			retVal[path] = []int{metadata.Data.CurrentVersion}
-		} else {
-			versions := getSecretVersionsToCopy(*metadata, versionCount)
-			retVal[path] = versions
-		}
-
+func startMetadataReaders(
+	srcVault *vault.Kv2Vault,
+	verCount int,
+) (chan string, chan *SecretVersions) {
+	pathChan := make(chan string, 50)
+	metadataChan := make(chan *SecretVersions, 50)
+	metaReaderGroup := new(sync.WaitGroup)
+	metaReaderGroup.Add(2)
+	for range 2 {
+		go getMetadataForPaths(pathChan, metadataChan, metaReaderGroup, srcVault, verCount)
 	}
-	return retVal
+	go closeMetadataResultChan(metadataChan, metaReaderGroup)
+	return pathChan, metadataChan
 }
+
+type SecretVersions struct {
+	secretPath string
+	versions   []int
+}
+
+func getMetadataForPaths(
+	pathChan chan string,
+	metadataChan chan *SecretVersions,
+	readerGroup *sync.WaitGroup,
+	srcVault *vault.Kv2Vault,
+	verCount int,
+) {
+	logger := slog.Default()
+	ctx, cancel := context.WithTimeout(context.TODO(), 60*time.Second)
+	defer readerGroup.Done()
+metadataLookup:
+	for {
+		select {
+		case <-ctx.Done():
+			logger.Error("path processor context timeout")
+			cancel()
+			break metadataLookup
+		case path, ok := <-pathChan:
+			if !ok {
+				logger.Debug("terminating metadata processor since input channel is closed")
+				cancel()
+				break metadataLookup
+			}
+			logger.Info("getting metadata from path", slog.String("path", path))
+			metadata, err := srcVault.GetSecretMetadata(path)
+			if err != nil {
+				logger.Error(
+					"an error occured while reading metadata from path",
+					slog.String("path", path),
+					slog.String("error", err.Error()),
+				)
+				continue
+			}
+			retVal := new(SecretVersions)
+			retVal.secretPath = path
+			if verCount == 1 {
+				retVal.versions = []int{metadata.Data.CurrentVersion}
+			} else {
+				versions := getSecretVersionsToCopy(*metadata, verCount)
+				retVal.versions = versions
+			}
+			metadataChan <- retVal
+		}
+	}
+}
+
+func closeMetadataResultChan(
+	metadataChan chan *SecretVersions,
+	readerGroup *sync.WaitGroup,
+) {
+	defer close(metadataChan)
+	readerGroup.Wait()
+}
+
+// func getMetadataForPathsOld(
+// 	sourcePaths []string,
+// 	versionCount int,
+// 	srcVault vault.Kv2Vault,
+// ) map[string][]int {
+// 	logger := slog.Default()
+// 	retVal := make(map[string][]int, 0)
+// 	for _, path := range sourcePaths {
+// 		metadata, err := srcVault.GetSecretMetadata(path)
+// 		if err != nil {
+// 			logger.Error(
+// 				"failed to get metadata",
+// 				slog.String("path", path),
+// 				slog.String("error", err.Error()),
+// 			)
+// 			continue
+// 		}
+// 		if versionCount == 1 {
+// 			retVal[path] = []int{metadata.Data.CurrentVersion}
+// 		} else {
+// 			versions := getSecretVersionsToCopy(*metadata, versionCount)
+// 			retVal[path] = versions
+// 		}
+
+// 	}
+// 	return retVal
+// }
 
 func getSecretVersionsToCopy(secretMetadata vault.Kv2MetadataResp, keep int) []int {
 	validVersions := filterDeletedSecretVersions(secretMetadata.Data.Versions)
@@ -313,4 +399,31 @@ func writeSecretVersions(dstVault *vault.Kv2Vault, secrets []*vault.Kv2SecretRes
 			)
 		}
 	}
+}
+
+func collectResults[T any](resChan chan *T) ([]*T, error) {
+	ctx, ctxCancel := context.WithTimeout(context.TODO(), 60*time.Second)
+	retVal := make([]*T, 0)
+	for {
+		select {
+		case <-ctx.Done():
+			ctxCancel()
+			err := fmt.Errorf("collect context terminated with error: %w", ctx.Err())
+			return nil, err
+		case res, ok := <-resChan:
+			if !ok {
+				ctxCancel()
+				return retVal, nil
+			}
+			retVal = append(retVal, res)
+		}
+	}
+
+}
+
+func sendDataToChan[T any](inputVals []T, targetChan chan T) {
+	for _, val := range inputVals {
+		targetChan <- val
+	}
+	close(targetChan)
 }
