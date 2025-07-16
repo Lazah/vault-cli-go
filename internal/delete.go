@@ -49,6 +49,10 @@ func DeleteSecrets(inputParams DeleteParams) {
 	}
 	close(pathChan)
 	deleteGroup.Wait()
+	err = srcClient.RevokeToken()
+	if err != nil {
+		logger.Error("failed to revoke session token")
+	}
 }
 
 func initVaultClient(vaultCfg *VaultInstance) (*vault.VaultClient, error) {
