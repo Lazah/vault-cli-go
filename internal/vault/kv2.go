@@ -109,7 +109,7 @@ func (k *Kv2Vault) GetSecretPaths(startPath string) chan string {
 	for range 2 {
 		go k.getSecretPathsFromPath(secretChan, pathChan, pathGroup)
 	}
-	go k.closePathLookupChan(secretChan, pathChan, pathGroup)
+	go k.closePathLookupChans(secretChan, pathChan, pathGroup)
 	return secretChan
 }
 
@@ -159,7 +159,7 @@ pathLookup:
 	}
 }
 
-func (k *Kv2Vault) closePathLookupChan(respChan, pathChan chan string, pathGroup *sync.WaitGroup) {
+func (k *Kv2Vault) closePathLookupChans(respChan, pathChan chan string, pathGroup *sync.WaitGroup) {
 	defer close(pathChan)
 	defer close(respChan)
 	pathGroup.Wait()
