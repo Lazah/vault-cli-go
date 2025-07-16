@@ -20,7 +20,7 @@ func (k *Kv2Vault) listPath(secretPath string) ([]string, []string, error) {
 		msg := fmt.Errorf("token check failed: %w", err)
 		return nil, nil, msg
 	}
-	req := k.Client.client.NewRequest()
+	req := k.VaultClient.apiClient.NewRequest()
 	resp, err := req.Execute("LIST", pathUrl.String())
 	if err != nil {
 		return nil, nil, err
@@ -73,7 +73,7 @@ func splitPaths(paths []string) ([]string, []string) {
 }
 
 type Kv2Vault struct {
-	Client      *VaultClient
+	VaultClient *VaultClient
 	MountPath   string
 	MetaDataUrl *url.URL
 	DataUrl     *url.URL
@@ -91,7 +91,7 @@ func (c *VaultClient) NewKv2Vault(mountPath string) (*Kv2Vault, error) {
 		return nil, err
 	}
 	return &Kv2Vault{
-		Client:      c,
+		VaultClient: c,
 		MountPath:   mountPath,
 		MetaDataUrl: metadataUrl,
 		DataUrl:     dataUrl,
@@ -134,10 +134,10 @@ func (k *Kv2Vault) getSecretPathsFromPath(startPath string, respChan chan string
 
 func (k *Kv2Vault) CheckToken() error {
 	guardTime := time.Now().Add(10 * time.Minute)
-	expired := k.Client.sessionToken.exp.Before(guardTime)
+	expired := k.VaultClient.sessionToken.exp.Before(guardTime)
 	var err error
 	if expired {
-		err = k.Client.RenewCurrentToken()
+		err = k.VaultClient.RenewCurrentToken()
 	}
 	if err != nil {
 		return err
@@ -146,7 +146,7 @@ func (k *Kv2Vault) CheckToken() error {
 }
 
 func (k *Kv2Vault) WriteSecret(path string, val map[string]string) error {
-	req := k.Client.client.NewRequest()
+	req := k.VaultClient.apiClient.NewRequest()
 	escapedPath := escapeRequestPath(path)
 	reqUrl, err := k.DataUrl.Parse(escapedPath)
 	if err != nil {
@@ -169,7 +169,7 @@ func (k *Kv2Vault) WriteSecret(path string, val map[string]string) error {
 }
 
 func (k *Kv2Vault) GetSecretMetadata(path string) (*Kv2MetadataResp, error) {
-	req := k.Client.client.NewRequest()
+	req := k.VaultClient.apiClient.NewRequest()
 	escapedPath := escapeRequestPath(path)
 	reqUrl, err := k.MetaDataUrl.Parse(escapedPath)
 	if err != nil {
@@ -198,7 +198,7 @@ func (k *Kv2Vault) GetSecretMetadata(path string) (*Kv2MetadataResp, error) {
 	return &respBody, nil
 }
 func (k *Kv2Vault) GetSecretVersion(path string, version int) (*Kv2SecretResp, error) {
-	req := k.Client.client.NewRequest()
+	req := k.VaultClient.apiClient.NewRequest()
 	escapedPath := escapeRequestPath(path)
 	fullPath := fmt.Sprintf("%s?version=%d", escapedPath, version)
 	reqUrl, err := k.DataUrl.Parse(fullPath)
@@ -230,7 +230,7 @@ func (k *Kv2Vault) DeletSecret(path string) error {
 		msg := fmt.Errorf("couldn't parse requested path '%s': %w", escapedPath, err)
 		return msg
 	}
-	req := k.Client.client.NewRequest()
+	req := k.VaultClient.apiClient.NewRequest()
 	resp, err := req.Delete(reqUrl.String())
 	if err != nil {
 		msg := fmt.Errorf("an error occured while processing request: %w", err)

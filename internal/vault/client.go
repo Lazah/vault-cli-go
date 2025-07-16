@@ -13,7 +13,7 @@ import (
 
 type VaultClient struct {
 	baseUrl       *url.URL
-	client        *resty.Client
+	apiClient     *resty.Client
 	authMountPath string
 	authType      string
 	tokenCreds    *tokenAuth
@@ -38,9 +38,9 @@ func NewClient(baseUrl string) (*VaultClient, error) {
 	restyClient := resty.New()
 	restyClient.BaseURL = serverUrl.String()
 	client := &VaultClient{
-		baseUrl: serverUrl,
-		client:  restyClient,
-		ctx:     context.TODO(),
+		baseUrl:   serverUrl,
+		apiClient: restyClient,
+		ctx:       context.TODO(),
 	}
 	return client, nil
 }
@@ -53,11 +53,11 @@ func (c *VaultClient) WithTokenAuth(token string) error {
 	return nil
 }
 func (c *VaultClient) Insecure() error {
-	if c.client == nil {
+	if c.apiClient == nil {
 		return fmt.Errorf("client should be initialized before calling this")
 	}
 	var origTlsConfig *tls.Config
-	origTransport, err := c.client.Transport()
+	origTransport, err := c.apiClient.Transport()
 	if err != nil {
 		return err
 	}
@@ -70,7 +70,7 @@ func (c *VaultClient) Insecure() error {
 		origTlsConfig = new(tls.Config)
 	}
 	origTlsConfig.InsecureSkipVerify = true
-	c.client.SetTLSClientConfig(origTlsConfig)
+	c.apiClient.SetTLSClientConfig(origTlsConfig)
 	return nil
 }
 
@@ -109,7 +109,7 @@ func (c *VaultClient) Authenticate() error {
 			return err
 		}
 	case "token":
-		c.client.SetAuthToken(c.tokenCreds.token)
+		c.apiClient.SetAuthToken(c.tokenCreds.token)
 		c.sessionToken.token = c.tokenCreds.token
 		c.sessionToken.renew = false
 		c.sessionToken.exp = time.Now().Add(10 * time.Hour)
@@ -130,7 +130,7 @@ func (c *VaultClient) authLdap() error {
 	if err != nil {
 		return err
 	}
-	req := c.client.NewRequest()
+	req := c.apiClient.NewRequest()
 	req.Body = body
 	respData := new(LdapAuthRespBody)
 	req.SetResult(respData)
@@ -149,7 +149,7 @@ func (c *VaultClient) authLdap() error {
 	tokenDur = tokenDur - (5 * time.Second)
 	tokenExp := time.Now().Add(tokenDur)
 	c.sessionToken.exp = tokenExp
-	c.client.SetAuthToken(respData.Auth.ClientToken)
+	c.apiClient.SetAuthToken(respData.Auth.ClientToken)
 	return nil
 }
 
@@ -168,7 +168,7 @@ func (c *VaultClient) authUser() error {
 	if err != nil {
 		return err
 	}
-	req := c.client.NewRequest()
+	req := c.apiClient.NewRequest()
 	req.Body = body
 	respData := new(UserpassAuthRespBody)
 	// var reqError error
@@ -187,7 +187,7 @@ func (c *VaultClient) authUser() error {
 	tokenDur = tokenDur - (5 * time.Second)
 	tokenExp := time.Now().Add(tokenDur)
 	c.sessionToken.exp = tokenExp
-	c.client.SetAuthToken(respData.Auth.ClientToken)
+	c.apiClient.SetAuthToken(respData.Auth.ClientToken)
 	return nil
 }
 
@@ -197,7 +197,7 @@ func (c *VaultClient) RenewCurrentToken() error {
 		return err
 	}
 
-	req := c.client.NewRequest()
+	req := c.apiClient.NewRequest()
 	resp, err := req.Post(renewUrl.String())
 	if err != nil {
 		msg := fmt.Errorf("an error occured while renewing token: %w", err)
@@ -222,7 +222,7 @@ func (c *VaultClient) RenewCurrentToken() error {
 	tokenDur = tokenDur - (5 * time.Second)
 	tokenExp := time.Now().Add(tokenDur)
 	c.sessionToken.exp = tokenExp
-	c.client.SetAuthToken(tokenData.Auth.ClientToken)
+	c.apiClient.SetAuthToken(tokenData.Auth.ClientToken)
 	return nil
 }
 
@@ -232,7 +232,7 @@ func (c *VaultClient) RevokeToken() error {
 		return err
 	}
 
-	req := c.client.NewRequest()
+	req := c.apiClient.NewRequest()
 	resp, err := req.Post(revokeUrl.String())
 	if err != nil {
 		msg := fmt.Errorf("an error occured while revoking token: %w", err)
