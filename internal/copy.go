@@ -149,7 +149,7 @@ metadataLookup:
 	for {
 		select {
 		case <-ctx.Done():
-			logger.Error("path processor context timeout")
+			logger.Error("metadata processor context timeout")
 			cancel()
 			break metadataLookup
 		case path, ok := <-pathChan:
@@ -188,34 +188,6 @@ func closeMetadataResultChan(
 	defer close(metadataChan)
 	readerGroup.Wait()
 }
-
-// func getMetadataForPathsOld(
-// 	sourcePaths []string,
-// 	versionCount int,
-// 	srcVault vault.Kv2Vault,
-// ) map[string][]int {
-// 	logger := slog.Default()
-// 	retVal := make(map[string][]int, 0)
-// 	for _, path := range sourcePaths {
-// 		metadata, err := srcVault.GetSecretMetadata(path)
-// 		if err != nil {
-// 			logger.Error(
-// 				"failed to get metadata",
-// 				slog.String("path", path),
-// 				slog.String("error", err.Error()),
-// 			)
-// 			continue
-// 		}
-// 		if versionCount == 1 {
-// 			retVal[path] = []int{metadata.Data.CurrentVersion}
-// 		} else {
-// 			versions := getSecretVersionsToCopy(*metadata, versionCount)
-// 			retVal[path] = versions
-// 		}
-
-// 	}
-// 	return retVal
-// }
 
 func getSecretVersionsToCopy(secretMetadata vault.Kv2MetadataResp, keep int) []int {
 	validVersions := filterDeletedSecretVersions(secretMetadata.Data.Versions)
