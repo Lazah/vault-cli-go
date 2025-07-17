@@ -66,9 +66,13 @@ func CopySecrets(inputParams CopyParams) {
 	for path := range srcPathChan {
 		sourcePaths = append(sourcePaths, path)
 	}
+	if len(sourcePaths) == 0 {
+		logger.Info("nothing to copy from path", slog.String("path", srcPath))
+		os.Exit(0)
+	}
 	secretPathChan, metadataChan := startMetadataReaders(srcVault, inputParams.Versions)
 	go sendDataToChan(sourcePaths, secretPathChan)
-	secretVersions, err := collectResults(metadataChan)
+	secretVersions, err := collectPointerResults(metadataChan)
 	if err != nil {
 		logger.Error(
 			"an error occured while collecting metadata",
@@ -76,7 +80,7 @@ func CopySecrets(inputParams CopyParams) {
 		)
 		os.Exit(10)
 	}
-	versionChan, copierGroup := startSecretCopiers(srcVault, dstVault)
+	versionChan, errorChan, copierGroup := startSecretCopiers(srcVault, dstVault)
 	dstPath := strings.Trim(inputParams.DstPath, "/")
 	for _, secretVersion := range secretVersions {
 		trimmedPath := strings.TrimPrefix(secretVersion.secretPath, srcPath)
@@ -88,6 +92,12 @@ func CopySecrets(inputParams CopyParams) {
 		versionChan <- versionInfo
 	}
 	close(versionChan)
+	failedPaths, err := collectResults(errorChan)
+	skipFailurePrint := false
+	if err != nil {
+		logger.Error("failed to collect copy failures")
+		skipFailurePrint = true
+	}
 	copierGroup.Wait()
 	err = srcVaultClient.RevokeToken()
 	if err != nil {
@@ -96,6 +106,12 @@ func CopySecrets(inputParams CopyParams) {
 	err = dstVaultClient.RevokeToken()
 	if err != nil {
 		logger.Warn("failed to revoke session token for destination vault")
+	}
+	if !skipFailurePrint {
+		fmt.Println("failed to copy following paths:")
+		for _, path := range failedPaths {
+			fmt.Println(path)
+		}
 	}
 }
 
@@ -240,18 +256,26 @@ type SecretVersionsToCopy struct {
 
 func startSecretCopiers(
 	srcVault, dstVault *vault.Kv2Vault,
-) (chan *SecretVersionsToCopy, *sync.WaitGroup) {
+) (chan *SecretVersionsToCopy, chan string, *sync.WaitGroup) {
 	versionChan := make(chan *SecretVersionsToCopy, 50)
+	errorChan := make(chan string, 50)
 	copierGroup := new(sync.WaitGroup)
 	copierGroup.Add(2)
 	for range 2 {
-		go copySecrets(versionChan, copierGroup, srcVault, dstVault)
+		go copySecrets(versionChan, errorChan, copierGroup, srcVault, dstVault)
 	}
-	return versionChan, copierGroup
+	go closeCopyChans(errorChan, copierGroup)
+	return versionChan, errorChan, copierGroup
+}
+
+func closeCopyChans(errorChan chan string, copyGroup *sync.WaitGroup) {
+	defer close(errorChan)
+	copyGroup.Wait()
 }
 
 func copySecrets(
 	secretChan chan *SecretVersionsToCopy,
+	errorChan chan string,
 	copierGroup *sync.WaitGroup,
 	srcVault, dstVault *vault.Kv2Vault,
 ) {
@@ -269,7 +293,10 @@ func copySecrets(
 			slog.String("vault", dstVault.DataUrl.Host),
 			slog.String("path", secretInfo.newPath),
 		)
-		writeSecretVersions(dstVault, secrets, secretInfo.newPath)
+		failed := writeSecretVersions(dstVault, secrets, secretInfo.newPath)
+		if failed {
+			errorChan <- secretInfo.origPath
+		}
 	}
 }
 
@@ -295,8 +322,13 @@ func getSecretVersions(
 	return secretData
 }
 
-func writeSecretVersions(dstVault *vault.Kv2Vault, secrets []*vault.Kv2SecretResp, path string) {
+func writeSecretVersions(
+	dstVault *vault.Kv2Vault,
+	secrets []*vault.Kv2SecretResp,
+	path string,
+) bool {
 	logger := slog.Default()
+	errorOccured := false
 	for _, secretResp := range secrets {
 		data := secretResp.Data.Data
 		err := dstVault.WriteSecret(path, data)
@@ -306,13 +338,35 @@ func writeSecretVersions(dstVault *vault.Kv2Vault, secrets []*vault.Kv2SecretRes
 				slog.String("path", path),
 				slog.String("vault", dstVault.DataUrl.Host),
 			)
+			errorOccured = true
 		}
 	}
+	return errorOccured
 }
 
-func collectResults[T any](resChan chan *T) ([]*T, error) {
+func collectPointerResults[T any](resChan chan *T) ([]*T, error) {
 	ctx, ctxCancel := context.WithTimeout(context.TODO(), 60*time.Second)
 	retVal := make([]*T, 0)
+	for {
+		select {
+		case <-ctx.Done():
+			ctxCancel()
+			err := fmt.Errorf("collect context terminated with error: %w", ctx.Err())
+			return nil, err
+		case res, ok := <-resChan:
+			if !ok {
+				ctxCancel()
+				return retVal, nil
+			}
+			retVal = append(retVal, res)
+		}
+	}
+
+}
+
+func collectResults[T any](resChan chan T) ([]T, error) {
+	ctx, ctxCancel := context.WithTimeout(context.TODO(), 60*time.Second)
+	retVal := make([]T, 0)
 	for {
 		select {
 		case <-ctx.Done():

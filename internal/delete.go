@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/url"
 	"os"
+	"strings"
 	"sync"
 
 	"github.com/Lazah/vault-cli-go/internal/vault"
@@ -38,10 +39,15 @@ func DeleteSecrets(inputParams DeleteParams) {
 		logger.Error("failed to initialize vault", slog.String("path", inputParams.SrcMountPath))
 		os.Exit(10)
 	}
-	srcPathChan := srcVault.GetSecretPaths(inputParams.SrcPath)
+	srcPath := strings.Trim(inputParams.SrcPath, "/")
+	srcPathChan := srcVault.GetSecretPaths(srcPath)
 	sourcePaths := make([]string, 0)
 	for path := range srcPathChan {
 		sourcePaths = append(sourcePaths, path)
+	}
+	if len(sourcePaths) == 0 {
+		logger.Info("nothing to delete from path", slog.String("path", srcPath))
+		os.Exit(0)
 	}
 	pathChan, deleteGroup := startDeleteWorkers(srcVault)
 	for _, path := range sourcePaths {
