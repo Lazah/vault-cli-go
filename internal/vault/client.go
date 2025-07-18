@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"regexp"
 	"sync"
 	"time"
 
@@ -20,7 +21,7 @@ type VaultClient struct {
 	tokenCreds    *tokenAuth
 	passwdCreds   *passwdAuth
 	ctx           context.Context
-	sessionToken  tokenInfo
+	sessionToken  *tokenInfo
 }
 type tokenAuth struct {
 	token string
@@ -83,11 +84,15 @@ func NewClient(baseUrl string) (*VaultClient, error) {
 	}
 	restyClient := resty.New()
 	restyClient.BaseURL = serverUrl.String()
+	sessionInfo := new(tokenInfo)
+	tMutex := new(sync.Mutex)
 	client := &VaultClient{
-		baseUrl:   serverUrl,
-		apiClient: restyClient,
-		ctx:       context.TODO(),
+		baseUrl:      serverUrl,
+		apiClient:    restyClient,
+		ctx:          context.TODO(),
+		sessionToken: sessionInfo,
 	}
+	client.sessionToken.tokenMutex = tMutex
 	return client, nil
 }
 
@@ -165,6 +170,7 @@ func (c *VaultClient) Authenticate() error {
 			return err
 		}
 	}
+	c.sessionToken.maxTtl = false
 	return nil
 }
 func (c *VaultClient) authLdap() error {
@@ -203,7 +209,8 @@ type tokenInfo struct {
 	token      string
 	renew      bool
 	exp        time.Time
-	tokenMutex sync.Mutex
+	maxTtl     bool
+	tokenMutex *sync.Mutex
 }
 
 func (c *VaultClient) authUser() error {
@@ -244,7 +251,7 @@ func (c *VaultClient) RenewCurrentToken() error {
 		return err
 	}
 	body := map[string]any{
-		"increment": "10m",
+		"increment": "2m",
 	}
 	req := c.apiClient.NewRequest()
 	req.SetBody(body)
@@ -269,6 +276,10 @@ func (c *VaultClient) RenewCurrentToken() error {
 	if tokenData.Auth == nil {
 		return fmt.Errorf("token data was nil")
 	}
+	exceedTtl := checkMaxTtl(tokenData.Warnings)
+	if exceedTtl {
+		c.sessionToken.maxTtl = true
+	}
 	c.sessionToken.token = tokenData.Auth.ClientToken
 	c.sessionToken.renew = tokenData.Auth.Renewable
 	tokenDur := time.Duration(int64(tokenData.Auth.LeaseDuration) * int64(time.Second))
@@ -277,6 +288,16 @@ func (c *VaultClient) RenewCurrentToken() error {
 	c.sessionToken.exp = tokenExp
 	c.apiClient.SetAuthToken(c.sessionToken.token)
 	return nil
+}
+
+func checkMaxTtl(warns []string) bool {
+	match := regexp.MustCompile("exceeded the effective max_ttl")
+	for _, warn := range warns {
+		if match.FindStringIndex(warn) != nil {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *VaultClient) RevokeToken() error {

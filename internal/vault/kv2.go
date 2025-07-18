@@ -56,7 +56,7 @@ type Kv2Resp struct {
 	Renewable     bool           `json:"renewable,omitempty"`
 	MountType     string         `json:"mount_type,omitempty"`
 	WrapInfo      map[string]any `json:"wrap_info,omitempty"`
-	Warnings      map[string]any `json:"warnings,omitempty"`
+	Warnings      []string       `json:"warnings,omitempty"`
 	Auth          *VaultAuth     `json:"auth,omitempty"`
 }
 type VaultAuth struct {
@@ -190,21 +190,39 @@ func (k *Kv2Vault) closePathLookupChans(respChan, pathChan chan string, pathGrou
 func (k *Kv2Vault) checkToken() error {
 	vault := fmt.Sprintf("%s/%s", k.VaultClient.baseUrl.String(), k.MountPath)
 	logger := slog.Default().With("vault", vault)
-	guardTime := time.Now().Add(60 * time.Second)
+	guardTime := time.Now().Add(30 * time.Second)
 	logger.Debug(
 		"checking token against date",
 		slog.String("guardDate", guardTime.Format(time.RFC3339)),
 	)
+	expired := k.VaultClient.sessionToken.exp.Before(guardTime)
+	if !expired && !k.VaultClient.sessionToken.maxTtl {
+		return nil
+	}
 	var err error
 	k.VaultClient.sessionToken.tokenMutex.Lock()
-	expired := k.VaultClient.sessionToken.exp.Before(guardTime)
+	defer k.VaultClient.sessionToken.tokenMutex.Unlock()
+	logger.Debug(
+		"rechecking token against date after lock release",
+		slog.String("guardDate", guardTime.Format(time.RFC3339)),
+	)
+	expired = k.VaultClient.sessionToken.exp.Before(guardTime)
+	if k.VaultClient.sessionToken.maxTtl && expired {
+		err := k.VaultClient.Authenticate()
+		if err != nil {
+			msg := fmt.Errorf("failed to reauthenticate after max session TTL reached: %w", err)
+			return msg
+		}
+		logger.Info("reauthenticated to vault")
+		return nil
+	}
 	if expired {
 		logger.Info("renewing token")
 		err = k.VaultClient.RenewCurrentToken()
-	}
-	k.VaultClient.sessionToken.tokenMutex.Unlock()
-	if err != nil {
-		return err
+		if err != nil {
+			return err
+		}
+		logger.Info("renewed session token")
 	}
 	return nil
 }
