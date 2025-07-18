@@ -61,7 +61,7 @@ func MoveSecrets(inputParams *CopyParams) {
 	}
 	secretPathChan, metadataChan := startMetadataReaders(srcVault, inputParams.Versions)
 	go sendDataToChan(sourcePaths, secretPathChan)
-	secretVersions, err := collectPointerResults(metadataChan)
+	secretVersions, err := collectResults(metadataChan)
 	if err != nil {
 		logger.Error(
 			"an error occured while collecting metadata",

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"sync"
 	"time"
 
 	"github.com/go-resty/resty/v2"
@@ -63,7 +64,8 @@ type userpassAuthData struct {
 }
 
 type TokenRenewResp struct {
-	Auth *tokenRenewData
+	Kv2Resp
+	Auth *tokenRenewData `json:"auth,omitempty"`
 }
 
 type tokenRenewData struct {
@@ -198,9 +200,10 @@ func (c *VaultClient) authLdap() error {
 }
 
 type tokenInfo struct {
-	token string
-	renew bool
-	exp   time.Time
+	token      string
+	renew      bool
+	exp        time.Time
+	tokenMutex sync.Mutex
 }
 
 func (c *VaultClient) authUser() error {
@@ -240,8 +243,11 @@ func (c *VaultClient) RenewCurrentToken() error {
 	if err != nil {
 		return err
 	}
-
+	body := map[string]any{
+		"increment": "10m",
+	}
 	req := c.apiClient.NewRequest()
+	req.SetBody(body)
 	resp, err := req.Post(renewUrl.String())
 	if err != nil {
 		msg := fmt.Errorf("an error occured while renewing token: %w", err)
@@ -251,8 +257,8 @@ func (c *VaultClient) RenewCurrentToken() error {
 		msg := fmt.Errorf("failed to renew  token: %s", resp.Status())
 		return msg
 	}
-	var tokenData *TokenRenewResp
-	err = json.Unmarshal(resp.Body(), tokenData)
+	var tokenData *Kv2Resp
+	err = json.Unmarshal(resp.Body(), &tokenData)
 	if err != nil {
 		msg := fmt.Errorf("failed to parse token renew response: %w", err)
 		return msg
@@ -265,11 +271,11 @@ func (c *VaultClient) RenewCurrentToken() error {
 	}
 	c.sessionToken.token = tokenData.Auth.ClientToken
 	c.sessionToken.renew = tokenData.Auth.Renewable
-	tokenDur := time.Duration(tokenData.Auth.LeaseDuration * int64(time.Second))
+	tokenDur := time.Duration(int64(tokenData.Auth.LeaseDuration) * int64(time.Second))
 	tokenDur = tokenDur - (5 * time.Second)
 	tokenExp := time.Now().Add(tokenDur)
 	c.sessionToken.exp = tokenExp
-	c.apiClient.SetAuthToken(tokenData.Auth.ClientToken)
+	c.apiClient.SetAuthToken(c.sessionToken.token)
 	return nil
 }
 

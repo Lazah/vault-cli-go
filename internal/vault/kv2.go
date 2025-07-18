@@ -17,7 +17,7 @@ func (k *Kv2Vault) listPath(secretPath string) ([]string, []string, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	err = k.CheckToken()
+	err = k.checkToken()
 	if err != nil {
 		msg := fmt.Errorf("token check failed: %w", err)
 		return nil, nil, msg
@@ -50,15 +50,36 @@ func (k *Kv2Vault) listPath(secretPath string) ([]string, []string, error) {
 }
 
 type Kv2Resp struct {
-	RequestId     string         `json:"request_id"`
-	LeaseId       string         `json:"lease_id"`
-	Renewable     bool           `json:"renewable"`
-	LeaseDuration int            `json:"lease_duration"`
-	WrapInfo      map[string]any `json:"wrap_info"`
-	Warnings      map[string]any
-	Auth          map[string]any
-	MountType     string `json:"mount_type"`
+	RequestId     string         `json:"request_id,omitempty"`
+	LeaseId       string         `json:"lease_id,omitempty"`
+	LeaseDuration int            `json:"lease_duration,omitempty"`
+	Renewable     bool           `json:"renewable,omitempty"`
+	MountType     string         `json:"mount_type,omitempty"`
+	WrapInfo      map[string]any `json:"wrap_info,omitempty"`
+	Warnings      map[string]any `json:"warnings,omitempty"`
+	Auth          *VaultAuth     `json:"auth,omitempty"`
 }
+type VaultAuth struct {
+	ClientToken   string            `json:"client_token,omitempty"`
+	Accessor      string            `json:"accessor,omitempty"`
+	Policies      []string          `json:"policies,omitempty"`
+	TokenPolicies []string          `json:"token_policies,omitempty"`
+	Metadata      map[string]string `json:"metadata,omitempty"`
+	LeaseDuration int               `json:"lease_duration,omitempty"`
+	Renewable     bool              `json:"renewable,omitempty"`
+	EntityId      string            `json:"entity_id,omitempty"`
+	TokenType     string            `json:"token_type,omitempty"`
+	Orphan        bool              `json:"orphan,omitempty"`
+	NumUses       int               `json:"num_uses,omitempty"`
+}
+
+/*
+   "entity_id": "248f704f-5da9-4718-4af7-0874395c002e",
+   "token_type": "service",
+   "orphan": true,
+   "mfa_requirement": null,
+   "num_uses": 0
+*/
 
 func splitPaths(paths []string) ([]string, []string) {
 	folders := make([]string, 0)
@@ -104,7 +125,7 @@ func (k *Kv2Vault) GetSecretPaths(startPath string) chan string {
 	secretChan := make(chan string, 100)
 	pathChan := make(chan string, 1000)
 	pathGroup := new(sync.WaitGroup)
-	processorCount := 2
+	processorCount := 4
 	pathGroup.Add(processorCount)
 	pathChan <- startPath
 	for range processorCount {
@@ -119,7 +140,7 @@ func (k *Kv2Vault) getSecretPathsFromPath(
 	pathGroup *sync.WaitGroup,
 ) {
 	logger := slog.Default()
-	ctx, cancel := context.WithTimeout(k.VaultClient.ctx, 60*time.Second)
+	ctx, cancel := context.WithTimeout(k.VaultClient.ctx, 60*time.Hour)
 	loopCounter := 0
 	defer pathGroup.Done()
 pathLookup:
@@ -147,9 +168,9 @@ pathLookup:
 			}
 			loopCounter = 0
 		default:
-			if loopCounter >= 10 {
+			if loopCounter > 4 {
 				cancel()
-				logger.Debug("terminating path processor as no work is queued for 10 cycles")
+				logger.Debug("terminating path processor as no work is queued for 5 cycles")
 				break pathLookup
 			}
 			if len(pathChan) == 0 {
@@ -166,13 +187,22 @@ func (k *Kv2Vault) closePathLookupChans(respChan, pathChan chan string, pathGrou
 	pathGroup.Wait()
 }
 
-func (k *Kv2Vault) CheckToken() error {
-	guardTime := time.Now().Add(10 * time.Minute)
-	expired := k.VaultClient.sessionToken.exp.Before(guardTime)
+func (k *Kv2Vault) checkToken() error {
+	vault := fmt.Sprintf("%s/%s", k.VaultClient.baseUrl.String(), k.MountPath)
+	logger := slog.Default().With("vault", vault)
+	guardTime := time.Now().Add(60 * time.Second)
+	logger.Debug(
+		"checking token against date",
+		slog.String("guardDate", guardTime.Format(time.RFC3339)),
+	)
 	var err error
+	k.VaultClient.sessionToken.tokenMutex.Lock()
+	expired := k.VaultClient.sessionToken.exp.Before(guardTime)
 	if expired {
+		logger.Info("renewing token")
 		err = k.VaultClient.RenewCurrentToken()
 	}
+	k.VaultClient.sessionToken.tokenMutex.Unlock()
 	if err != nil {
 		return err
 	}
@@ -180,6 +210,11 @@ func (k *Kv2Vault) CheckToken() error {
 }
 
 func (k *Kv2Vault) WriteSecret(path string, val map[string]string) error {
+	err := k.checkToken()
+	if err != nil {
+		msg := fmt.Errorf("token check failed: %w", err)
+		return msg
+	}
 	req := k.VaultClient.apiClient.NewRequest()
 	escapedPath := escapeRequestPath(path)
 	reqUrl, err := k.DataUrl.Parse(escapedPath)
@@ -203,6 +238,11 @@ func (k *Kv2Vault) WriteSecret(path string, val map[string]string) error {
 }
 
 func (k *Kv2Vault) GetSecretMetadata(path string) (*Kv2MetadataResp, error) {
+	err := k.checkToken()
+	if err != nil {
+		msg := fmt.Errorf("token check failed: %w", err)
+		return nil, msg
+	}
 	req := k.VaultClient.apiClient.NewRequest()
 	escapedPath := escapeRequestPath(path)
 	reqUrl, err := k.MetaDataUrl.Parse(escapedPath)
@@ -232,6 +272,11 @@ func (k *Kv2Vault) GetSecretMetadata(path string) (*Kv2MetadataResp, error) {
 	return &respBody, nil
 }
 func (k *Kv2Vault) GetSecretVersion(path string, version int) (*Kv2SecretResp, error) {
+	err := k.checkToken()
+	if err != nil {
+		msg := fmt.Errorf("token check failed: %w", err)
+		return nil, msg
+	}
 	req := k.VaultClient.apiClient.NewRequest()
 	escapedPath := escapeRequestPath(path)
 	fullPath := fmt.Sprintf("%s?version=%d", escapedPath, version)
@@ -258,6 +303,11 @@ func (k *Kv2Vault) GetSecretVersion(path string, version int) (*Kv2SecretResp, e
 	return respBody, nil
 }
 func (k *Kv2Vault) DeletSecret(path string) error {
+	err := k.checkToken()
+	if err != nil {
+		msg := fmt.Errorf("token check failed: %w", err)
+		return msg
+	}
 	escapedPath := escapeRequestPath(path)
 	reqUrl, err := k.MetaDataUrl.Parse(escapedPath)
 	if err != nil {

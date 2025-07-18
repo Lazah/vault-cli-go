@@ -9,10 +9,10 @@ import (
 )
 
 type VaultInstance struct {
-	BaseURL    string           `mapstructure:"baseUrl" yaml:"baseUrl"`
-	Insecure   bool             `mapstructure:"insecure" yaml:"insecure"`
-	AuthType   string           `mapstructure:"authType" yaml:"authType"`
-	UserCreds  *VaultUserCreds  `mapstructure:"userCreds" yaml:"userCreds"`
+	BaseURL    string           `mapstructure:"baseUrl"    yaml:"baseUrl"`
+	Insecure   bool             `mapstructure:"insecure"   yaml:"insecure"`
+	AuthType   string           `mapstructure:"authType"   yaml:"authType"`
+	UserCreds  *VaultUserCreds  `mapstructure:"userCreds"  yaml:"userCreds"`
 	TokenCreds *VaultTokenCreds `mapstructure:"tokenCreds" yaml:"tokenCreds"`
 }
 
@@ -26,9 +26,9 @@ type VaultTokenCreds struct {
 }
 
 type ClientConfig struct {
-	SrcVault *VaultInstance `mapstructure:"srcVault" yaml:"srcVault"`
-	DstVault *VaultInstance `mapstructure:"dstVault" yaml:"dstVault"`
-	LogLevel string         `mapstructure:"logLevel" yaml:"logLevel"`
+	SrcVault *VaultInstance `mapstructure:"srcVault,omitempty" yaml:"srcVault,omitempty"`
+	DstVault *VaultInstance `mapstructure:"dstVault,omitempty" yaml:"dstVault,omitempty"`
+	LogLevel string         `mapstructure:"logLevel,omitempty" yaml:"logLevel,omitempty"`
 }
 
 func ReadConfig(cfgFile string) {

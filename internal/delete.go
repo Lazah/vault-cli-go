@@ -87,9 +87,10 @@ func initVaultClient(vaultCfg *VaultInstance) (*vault.VaultClient, error) {
 
 func startDeleteWorkers(srcVault *vault.Kv2Vault) (chan string, *sync.WaitGroup) {
 	deleteGroup := new(sync.WaitGroup)
-	deleteGroup.Add(2)
 	pathChan := make(chan string, 100)
-	for range 2 {
+	processCount := 4
+	deleteGroup.Add(processCount)
+	for range processCount {
 		go deleteSecrets(srcVault, pathChan, deleteGroup)
 	}
 	return pathChan, deleteGroup

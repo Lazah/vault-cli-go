@@ -72,7 +72,7 @@ func CopySecrets(inputParams CopyParams) {
 	}
 	secretPathChan, metadataChan := startMetadataReaders(srcVault, inputParams.Versions)
 	go sendDataToChan(sourcePaths, secretPathChan)
-	secretVersions, err := collectPointerResults(metadataChan)
+	secretVersions, err := collectResults(metadataChan)
 	if err != nil {
 		logger.Error(
 			"an error occured while collecting metadata",
@@ -99,6 +99,9 @@ func CopySecrets(inputParams CopyParams) {
 		skipFailurePrint = true
 	}
 	copierGroup.Wait()
+	if len(failedPaths) == 0 {
+		skipFailurePrint = true
+	}
 	err = srcVaultClient.RevokeToken()
 	if err != nil {
 		logger.Warn("failed to revoke session token for source vault")
@@ -122,8 +125,9 @@ func startMetadataReaders(
 	pathChan := make(chan string, 50)
 	metadataChan := make(chan *SecretVersions, 50)
 	metaReaderGroup := new(sync.WaitGroup)
-	metaReaderGroup.Add(2)
-	for range 2 {
+	processCount := 4
+	metaReaderGroup.Add(processCount)
+	for range processCount {
 		go getMetadataForPaths(pathChan, metadataChan, metaReaderGroup, srcVault, verCount)
 	}
 	go closeMetadataResultChan(metadataChan, metaReaderGroup)
@@ -232,8 +236,9 @@ func startSecretCopiers(
 	versionChan := make(chan *SecretVersionsToCopy, 50)
 	errorChan := make(chan string, 50)
 	copierGroup := new(sync.WaitGroup)
-	copierGroup.Add(2)
-	for range 2 {
+	processCount := 4
+	copierGroup.Add(processCount)
+	for range processCount {
 		go copySecrets(versionChan, errorChan, copierGroup, srcVault, dstVault)
 	}
 	go closeCopyChans(errorChan, copierGroup)
@@ -265,9 +270,12 @@ func copySecrets(
 			slog.String("vault", dstVault.DataUrl.Host),
 			slog.String("path", secretInfo.newPath),
 		)
-		failed := writeSecretVersions(dstVault, secrets, secretInfo.newPath)
-		if failed {
-			errorChan <- secretInfo.origPath
+		for _, secret := range secrets {
+			err := writeSecretVersions(dstVault, secret, secretInfo.newPath)
+			if err != nil {
+				errorChan <- secretInfo.origPath
+				break
+			}
 		}
 	}
 }
@@ -296,44 +304,21 @@ func getSecretVersions(
 
 func writeSecretVersions(
 	dstVault *vault.Kv2Vault,
-	secrets []*vault.Kv2SecretResp,
+	secret *vault.Kv2SecretResp,
 	path string,
-) bool {
+) error {
 	logger := slog.Default()
-	errorOccured := false
-	for _, secretResp := range secrets {
-		data := secretResp.Data.Data
-		err := dstVault.WriteSecret(path, data)
-		if err != nil {
-			logger.Error(
-				"failed to write secret to path",
-				slog.String("path", path),
-				slog.String("vault", dstVault.DataUrl.Host),
-			)
-			errorOccured = true
-		}
-	}
-	return errorOccured
-}
-
-func collectPointerResults[T any](resChan chan *T) ([]*T, error) {
-	ctx, ctxCancel := context.WithTimeout(context.TODO(), 60*time.Second)
-	retVal := make([]*T, 0)
-	for {
-		select {
-		case <-ctx.Done():
-			ctxCancel()
-			err := fmt.Errorf("collect context terminated with error: %w", ctx.Err())
-			return nil, err
-		case res, ok := <-resChan:
-			if !ok {
-				ctxCancel()
-				return retVal, nil
-			}
-			retVal = append(retVal, res)
-		}
+	data := secret.Data.Data
+	err := dstVault.WriteSecret(path, data)
+	if err != nil {
+		logger.Error(
+			"failed to write secret to path",
+			slog.String("path", path),
+			slog.String("vault", dstVault.DataUrl.Host),
+		)
 	}
 
+	return err
 }
 
 func collectResults[T any](resChan chan T) ([]T, error) {
