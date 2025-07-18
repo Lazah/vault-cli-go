@@ -72,15 +72,44 @@ func initVaultClient(vaultCfg *VaultInstance) (*vault.VaultClient, error) {
 		msg := fmt.Errorf("vault client init failed: %w", err)
 		return nil, msg
 	}
-	err = vaultClient.WithUserAuth(vaultCfg.UserCreds.Username, vaultCfg.UserCreds.Password, "")
+	if vaultCfg.Insecure {
+		err = vaultClient.Insecure()
+	}
 	if err != nil {
-		msg := fmt.Errorf("vault authentication failed: %w", err)
+		msg := fmt.Errorf("failed to set connection to insecure: %w", err)
 		return nil, msg
 	}
-	err = vaultClient.Authenticate()
-	if err != nil {
-		msg := fmt.Errorf("an error occured while performing authentication to vault: %w", err)
-		return nil, msg
+	switch vaultCfg.AuthType {
+	case "userpass":
+		err = vaultClient.WithUserAuth(vaultCfg.UserCreds.Username, vaultCfg.UserCreds.Password, "")
+		if err != nil {
+			msg := fmt.Errorf("vault authentication failed: %w", err)
+			return nil, msg
+		}
+		err = vaultClient.Authenticate()
+		if err != nil {
+			msg := fmt.Errorf("an error occured while performing authentication to vault: %w", err)
+			return nil, msg
+		}
+	case "ldap":
+		err = vaultClient.WithLdapAuth(vaultCfg.UserCreds.Username, vaultCfg.UserCreds.Password, "")
+		if err != nil {
+			msg := fmt.Errorf("vault authentication failed: %w", err)
+			return nil, msg
+		}
+		err = vaultClient.Authenticate()
+		if err != nil {
+			msg := fmt.Errorf("an error occured while performing authentication to vault: %w", err)
+			return nil, msg
+		}
+	case "token":
+		err = vaultClient.WithTokenAuth(vaultCfg.TokenCreds.Token)
+		if err != nil {
+			msg := fmt.Errorf("vault authentication failed: %w", err)
+			return nil, msg
+		}
+	default:
+		return nil, fmt.Errorf("unsupported authentication method specified")
 	}
 	return vaultClient, nil
 }
