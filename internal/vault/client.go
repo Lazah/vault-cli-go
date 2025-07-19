@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"net/url"
 	"regexp"
 	"sync"
@@ -84,6 +85,15 @@ func NewClient(baseUrl string) (*VaultClient, error) {
 	}
 	restyClient := resty.New()
 	restyClient.BaseURL = serverUrl.String()
+	restyClient.SetTimeout(1 * time.Minute)
+	restyClient.SetRetryCount(3)
+	restyClient.AddRetryCondition(func(r *resty.Response, err error) bool {
+		if (r.StatusCode() == http.StatusBadGateway) ||
+			(r.StatusCode() == http.StatusGatewayTimeout) {
+			return true
+		}
+		return false
+	})
 	sessionInfo := new(tokenInfo)
 	tMutex := new(sync.Mutex)
 	client := &VaultClient{
@@ -198,8 +208,9 @@ func (c *VaultClient) authLdap() error {
 	c.sessionToken.token = respData.Auth.ClientToken
 	c.sessionToken.renew = respData.Auth.Renewable
 	tokenDur := time.Duration(respData.Auth.LeaseDuration * int64(time.Second))
-	tokenDur = tokenDur - (5 * time.Second)
+	tokenDur = tokenDur - (30 * time.Second)
 	tokenExp := time.Now().Add(tokenDur)
+	c.sessionToken.acquired = time.Now()
 	c.sessionToken.exp = tokenExp
 	c.apiClient.SetAuthToken(respData.Auth.ClientToken)
 	return nil
@@ -208,6 +219,7 @@ func (c *VaultClient) authLdap() error {
 type tokenInfo struct {
 	token      string
 	renew      bool
+	acquired   time.Time
 	exp        time.Time
 	maxTtl     bool
 	tokenMutex *sync.Mutex
@@ -233,48 +245,58 @@ func (c *VaultClient) authUser() error {
 		return err
 	}
 	if resp.IsError() {
-		return resp.Error().(error)
+		return fmt.Errorf(
+			"an erro occured while performing user authentication:'%s'",
+			resp.Status(),
+		)
 	}
 	c.sessionToken.token = respData.Auth.ClientToken
 	c.sessionToken.renew = respData.Auth.Renewable
 	tokenDur := time.Duration(respData.Auth.LeaseDuration * int64(time.Second))
-	tokenDur = tokenDur - (5 * time.Second)
+	tokenDur = tokenDur - (30 * time.Second)
 	tokenExp := time.Now().Add(tokenDur)
 	c.sessionToken.exp = tokenExp
+	c.sessionToken.acquired = time.Now()
 	c.apiClient.SetAuthToken(respData.Auth.ClientToken)
 	return nil
 }
 
-func (c *VaultClient) RenewCurrentToken() error {
+func (c *VaultClient) RenewCurrentToken() (bool, int, error) {
+	recentTime := time.Now()
+	freshBuffer := c.sessionToken.acquired.Add(60 * time.Second)
+	tokenRecent := recentTime.Before(freshBuffer)
+	if tokenRecent {
+		return false, 0, nil
+	}
 	renewUrl, err := c.baseUrl.Parse("v1/auth/token/renew-self")
 	if err != nil {
-		return err
+		return false, 0, err
 	}
 	body := map[string]any{
-		"increment": "2m",
+		"increment": "10m",
 	}
 	req := c.apiClient.NewRequest()
 	req.SetBody(body)
 	resp, err := req.Post(renewUrl.String())
 	if err != nil {
 		msg := fmt.Errorf("an error occured while renewing token: %w", err)
-		return msg
+		return false, resp.StatusCode(), msg
 	}
 	if resp.IsError() {
 		msg := fmt.Errorf("failed to renew  token: %s", resp.Status())
-		return msg
+		return false, resp.StatusCode(), msg
 	}
 	var tokenData *Kv2Resp
 	err = json.Unmarshal(resp.Body(), &tokenData)
 	if err != nil {
 		msg := fmt.Errorf("failed to parse token renew response: %w", err)
-		return msg
+		return false, resp.StatusCode(), msg
 	}
 	if tokenData == nil {
-		return fmt.Errorf("token response was nil")
+		return false, resp.StatusCode(), fmt.Errorf("token response was nil")
 	}
 	if tokenData.Auth == nil {
-		return fmt.Errorf("token data was nil")
+		return false, resp.StatusCode(), fmt.Errorf("token data was nil")
 	}
 	exceedTtl := checkMaxTtl(tokenData.Warnings)
 	if exceedTtl {
@@ -283,11 +305,12 @@ func (c *VaultClient) RenewCurrentToken() error {
 	c.sessionToken.token = tokenData.Auth.ClientToken
 	c.sessionToken.renew = tokenData.Auth.Renewable
 	tokenDur := time.Duration(int64(tokenData.Auth.LeaseDuration) * int64(time.Second))
-	tokenDur = tokenDur - (5 * time.Second)
+	tokenDur = tokenDur - (30 * time.Second)
 	tokenExp := time.Now().Add(tokenDur)
 	c.sessionToken.exp = tokenExp
-	c.apiClient.SetAuthToken(c.sessionToken.token)
-	return nil
+	c.sessionToken.acquired = time.Now()
+	c.apiClient.SetAuthToken(tokenData.Auth.ClientToken)
+	return true, resp.StatusCode(), nil
 }
 
 func checkMaxTtl(warns []string) bool {
