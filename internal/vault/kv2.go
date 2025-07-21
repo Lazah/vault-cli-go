@@ -7,36 +7,15 @@ import (
 	"net/url"
 	"strings"
 	"sync"
-	"time"
 )
 
 func (k *Kv2Vault) ListPath(secretPath string) ([]string, []string, error) {
-	logger := slog.Default()
 	escapedSecretPath := escapeRequestPath(secretPath)
 	pathUrl, err := k.MetaDataUrl.Parse(escapedSecretPath)
 	if err != nil {
 		return nil, nil, err
 	}
-	guardTime := time.Now().Add(60 * time.Second)
-	logger.Debug(
-		"checking token against date",
-		slog.String("guardDate", guardTime.Format(time.RFC3339)),
-	)
-	expired := guardTime.After(k.VaultClient.sessionToken.exp)
-	if expired {
-		k.VaultClient.sessionToken.tokenMutex.Lock()
-		expired := guardTime.After(k.VaultClient.sessionToken.exp)
-		if expired {
-			err = k.checkToken()
-			if err != nil {
-				msg := fmt.Errorf("token check failed: %w", err)
-				k.VaultClient.sessionToken.tokenMutex.Unlock()
-				return nil, nil, msg
-			}
-		}
-		time.Sleep(1 * time.Second)
-		k.VaultClient.sessionToken.tokenMutex.Unlock()
-	}
+	k.checkToken()
 	k.operLock.RLock()
 	req := k.VaultClient.apiClient.NewRequest()
 	resp, err := req.Execute("LIST", pathUrl.String())
@@ -144,72 +123,32 @@ func (c *VaultClient) NewKv2Vault(mountPath string) (*Kv2Vault, error) {
 func (k *Kv2Vault) checkToken() error {
 	vault := fmt.Sprintf("%s/%s", k.VaultClient.baseUrl.String(), k.MountPath)
 	logger := slog.Default().With("vault", vault)
-	guardTime := time.Now().Add(60 * time.Second)
-	expired := guardTime.After(k.VaultClient.sessionToken.exp)
-	if !expired && !k.VaultClient.sessionToken.maxTtl {
-		return nil
-	}
 	k.operLock.Lock()
-	if k.VaultClient.sessionToken.maxTtl && expired {
-		err := k.VaultClient.Authenticate()
-		if err != nil {
-			msg := fmt.Errorf("failed to reauthenticate after max session TTL reached: %w", err)
-			k.operLock.Unlock()
-			return msg
-		}
-		logger.Info("reauthenticated to vault")
+	logger.Debug("checking if token needs to be renewed")
+	refreshed, err := k.VaultClient.RenewCurrentToken()
+	if err != nil {
+		logger.Error("token renew failed")
 		k.operLock.Unlock()
-		return nil
+		return err
 	}
-	if expired {
-		logger.Info("renewing token")
-		renewed, code, err := k.VaultClient.RenewCurrentToken()
-		if err != nil {
-			if code == 403 {
-				err = k.VaultClient.Authenticate()
-			}
-			k.operLock.Unlock()
-			return err
-		}
-		if renewed {
-			logger.Info("renewed session token")
-		} else {
-			logger.Info("didn't renew token as it was recently renewed")
-		}
+	if refreshed {
+		logger.Debug("renewed token")
+	} else {
+		logger.Debug("didn't renew token")
+	}
 
-	}
 	k.operLock.Unlock()
 	return nil
 }
 
 func (k *Kv2Vault) WriteSecret(path string, val map[string]string) error {
-	logger := slog.Default()
 	escapedPath := escapeRequestPath(path)
 	reqUrl, err := k.DataUrl.Parse(escapedPath)
 	if err != nil {
 		msg := fmt.Errorf("couldn't parse path %q: %w", escapedPath, err)
 		return msg
 	}
-	guardTime := time.Now().Add(60 * time.Second)
-	logger.Debug(
-		"checking token against date",
-		slog.String("guardDate", guardTime.Format(time.RFC3339)),
-	)
-	expired := guardTime.After(k.VaultClient.sessionToken.exp)
-	if expired {
-		k.VaultClient.sessionToken.tokenMutex.Lock()
-		expired := guardTime.After(k.VaultClient.sessionToken.exp)
-		if expired {
-			err = k.checkToken()
-			if err != nil {
-				msg := fmt.Errorf("token check failed: %w", err)
-				k.VaultClient.sessionToken.tokenMutex.Unlock()
-				return msg
-			}
-		}
-		time.Sleep(1 * time.Second)
-		k.VaultClient.sessionToken.tokenMutex.Unlock()
-	}
+	k.checkToken()
 	k.operLock.RLock()
 	req := k.VaultClient.apiClient.NewRequest()
 	reqBody := make(map[string]any, 0)
@@ -233,33 +172,13 @@ func (k *Kv2Vault) WriteSecret(path string, val map[string]string) error {
 }
 
 func (k *Kv2Vault) GetSecretMetadata(path string) (*Kv2MetadataResp, error) {
-	logger := slog.Default()
 	escapedPath := escapeRequestPath(path)
 	reqUrl, err := k.MetaDataUrl.Parse(escapedPath)
 	if err != nil {
 		msg := fmt.Errorf("couldn't parse request path %q:%w", escapedPath, err)
 		return nil, msg
 	}
-	guardTime := time.Now().Add(60 * time.Second)
-	logger.Debug(
-		"checking token against date",
-		slog.String("guardDate", guardTime.Format(time.RFC3339)),
-	)
-	expired := guardTime.After(k.VaultClient.sessionToken.exp)
-	if expired {
-		k.VaultClient.sessionToken.tokenMutex.Lock()
-		expired := guardTime.After(k.VaultClient.sessionToken.exp)
-		if expired {
-			err = k.checkToken()
-			if err != nil {
-				msg := fmt.Errorf("token check failed: %w", err)
-				k.VaultClient.sessionToken.tokenMutex.Unlock()
-				return nil, msg
-			}
-		}
-		time.Sleep(1 * time.Second)
-		k.VaultClient.sessionToken.tokenMutex.Unlock()
-	}
+	k.checkToken()
 	k.operLock.RLock()
 	req := k.VaultClient.apiClient.NewRequest()
 	var respBody Kv2MetadataResp
@@ -285,7 +204,6 @@ func (k *Kv2Vault) GetSecretMetadata(path string) (*Kv2MetadataResp, error) {
 	return &respBody, nil
 }
 func (k *Kv2Vault) GetSecretVersion(path string, version int) (*Kv2SecretResp, error) {
-	logger := slog.Default()
 	escapedPath := escapeRequestPath(path)
 	fullPath := fmt.Sprintf("%s?version=%d", escapedPath, version)
 	reqUrl, err := k.DataUrl.Parse(fullPath)
@@ -293,26 +211,7 @@ func (k *Kv2Vault) GetSecretVersion(path string, version int) (*Kv2SecretResp, e
 		msg := fmt.Errorf("couldn't parse path %q: %w", fullPath, err)
 		return nil, msg
 	}
-	guardTime := time.Now().Add(60 * time.Second)
-	logger.Debug(
-		"checking token against date",
-		slog.String("guardDate", guardTime.Format(time.RFC3339)),
-	)
-	expired := guardTime.After(k.VaultClient.sessionToken.exp)
-	if expired {
-		k.VaultClient.sessionToken.tokenMutex.Lock()
-		expired := guardTime.After(k.VaultClient.sessionToken.exp)
-		if expired {
-			err = k.checkToken()
-			if err != nil {
-				msg := fmt.Errorf("token check failed: %w", err)
-				k.VaultClient.sessionToken.tokenMutex.Unlock()
-				return nil, msg
-			}
-		}
-		time.Sleep(1 * time.Second)
-		k.VaultClient.sessionToken.tokenMutex.Unlock()
-	}
+	k.checkToken()
 	k.operLock.RLock()
 	req := k.VaultClient.apiClient.NewRequest()
 	resp, err := req.Get(reqUrl.String())
@@ -334,33 +233,13 @@ func (k *Kv2Vault) GetSecretVersion(path string, version int) (*Kv2SecretResp, e
 	return respBody, nil
 }
 func (k *Kv2Vault) DeletSecret(path string) error {
-	logger := slog.Default()
 	escapedPath := escapeRequestPath(path)
 	reqUrl, err := k.MetaDataUrl.Parse(escapedPath)
 	if err != nil {
 		msg := fmt.Errorf("couldn't parse requested path '%s': %w", escapedPath, err)
 		return msg
 	}
-	guardTime := time.Now().Add(60 * time.Second)
-	logger.Debug(
-		"checking token against date",
-		slog.String("guardDate", guardTime.Format(time.RFC3339)),
-	)
-	expired := guardTime.After(k.VaultClient.sessionToken.exp)
-	if expired {
-		k.VaultClient.sessionToken.tokenMutex.Lock()
-		expired := guardTime.After(k.VaultClient.sessionToken.exp)
-		if expired {
-			err = k.checkToken()
-			if err != nil {
-				msg := fmt.Errorf("token check failed: %w", err)
-				k.VaultClient.sessionToken.tokenMutex.Unlock()
-				return msg
-			}
-		}
-		time.Sleep(1 * time.Second)
-		k.VaultClient.sessionToken.tokenMutex.Unlock()
-	}
+	k.checkToken()
 	k.operLock.RLock()
 	req := k.VaultClient.apiClient.NewRequest()
 	resp, err := req.Delete(reqUrl.String())

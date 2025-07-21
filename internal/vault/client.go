@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -261,16 +262,65 @@ func (c *VaultClient) authUser() error {
 	return nil
 }
 
-func (c *VaultClient) RenewCurrentToken() (bool, int, error) {
-	recentTime := time.Now()
-	freshBuffer := c.sessionToken.acquired.Add(60 * time.Second)
-	tokenRecent := recentTime.Before(freshBuffer)
+func (c *VaultClient) RenewCurrentToken() (bool, error) {
+	logger := slog.Default()
+	c.sessionToken.tokenMutex.Lock()
+	currentTime := time.Now()
+	aboutToExpireTime := currentTime.Add(60 * time.Second)
+	refreshedRecentlyTime := c.sessionToken.acquired.Add(60 * time.Second)
+	tokenRecent := currentTime.Before(refreshedRecentlyTime)
 	if tokenRecent {
-		return false, 0, nil
+		c.sessionToken.tokenMutex.Unlock()
+		return false, nil
 	}
+	var respCode int
+	var err error
+	expired := currentTime.After(c.sessionToken.exp)
+	aboutToExpire := aboutToExpireTime.After(c.sessionToken.exp)
+	if expired || (aboutToExpire && c.sessionToken.maxTtl) {
+		logger.Info(
+			"token is about to expire and max session ttl reached or has expired... reauthenticating",
+		)
+		err = c.Authenticate()
+		if err != nil {
+			msg := fmt.Errorf("failed to re authenticate to vault after expiry reached: %w", err)
+			c.sessionToken.tokenMutex.Unlock()
+			return false, msg
+		}
+	}
+	if aboutToExpire {
+		logger.Debug("token is about to expire refreshing")
+		respCode, err = c.refreshToken()
+		if respCode == 403 {
+			logger.Info("token expired or revoked... reauthenticating")
+			err = c.Authenticate()
+			if err != nil {
+				msg := fmt.Errorf(
+					"failed to re authenticate to vault after expiry reached: %w",
+					err,
+				)
+				c.sessionToken.tokenMutex.Unlock()
+				return false, msg
+			}
+		}
+		if err != nil {
+			msg := fmt.Errorf("token renew failed: %w", err)
+			c.sessionToken.tokenMutex.Unlock()
+			return false, msg
+		}
+	}
+	if !aboutToExpire && !expired {
+		c.sessionToken.tokenMutex.Unlock()
+		return false, nil
+	}
+	logger.Info("token renewed")
+	c.sessionToken.tokenMutex.Unlock()
+	return true, nil
+}
+func (c *VaultClient) refreshToken() (int, error) {
 	renewUrl, err := c.baseUrl.Parse("v1/auth/token/renew-self")
 	if err != nil {
-		return false, 0, err
+		return 0, err
 	}
 	body := map[string]any{
 		"increment": "10m",
@@ -280,23 +330,23 @@ func (c *VaultClient) RenewCurrentToken() (bool, int, error) {
 	resp, err := req.Post(renewUrl.String())
 	if err != nil {
 		msg := fmt.Errorf("an error occured while renewing token: %w", err)
-		return false, resp.StatusCode(), msg
+		return resp.StatusCode(), msg
 	}
 	if resp.IsError() {
-		msg := fmt.Errorf("failed to renew  token: %s", resp.Status())
-		return false, resp.StatusCode(), msg
+		msg := fmt.Errorf("failed to renew token: %s", resp.Status())
+		return resp.StatusCode(), msg
 	}
 	var tokenData *Kv2Resp
 	err = json.Unmarshal(resp.Body(), &tokenData)
 	if err != nil {
 		msg := fmt.Errorf("failed to parse token renew response: %w", err)
-		return false, resp.StatusCode(), msg
+		return 0, msg
 	}
 	if tokenData == nil {
-		return false, resp.StatusCode(), fmt.Errorf("token response was nil")
+		return 0, fmt.Errorf("token response was nil")
 	}
 	if tokenData.Auth == nil {
-		return false, resp.StatusCode(), fmt.Errorf("token data was nil")
+		return 0, fmt.Errorf("token data was nil")
 	}
 	exceedTtl := checkMaxTtl(tokenData.Warnings)
 	if exceedTtl {
@@ -310,7 +360,7 @@ func (c *VaultClient) RenewCurrentToken() (bool, int, error) {
 	c.sessionToken.exp = tokenExp
 	c.sessionToken.acquired = time.Now()
 	c.apiClient.SetAuthToken(tokenData.Auth.ClientToken)
-	return true, resp.StatusCode(), nil
+	return resp.StatusCode(), nil
 }
 
 func checkMaxTtl(warns []string) bool {

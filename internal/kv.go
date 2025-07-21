@@ -1081,7 +1081,7 @@ func (d *DataSender[T]) Start() {
 processLoop:
 	for {
 		d.operLock.Lock()
-		if len(d.inputVals) == 0 && loopCounter > 10 {
+		if len(d.inputVals) == 0 && len(d.sendChan) == 0 && loopCounter > 10 {
 			d.operLock.Unlock()
 			break processLoop
 		}
