@@ -95,7 +95,7 @@ func CopySecrets(inputParams CopyParams) {
 	}
 	srcPath := strings.Trim(inputParams.SrcPath, "/")
 	logger.Info("resolving paths to copy")
-	pathSenderCtx, pathSenderCtxCancel := context.WithTimeout(context.TODO(), 60*time.Minute)
+	pathSenderCtx, pathSenderCtxCancel := context.WithTimeout(context.TODO(), 2*time.Hour)
 	initialInput := []string{srcPath}
 	pathSender := NewDataSender(20, 40*time.Millisecond, initialInput, pathSenderCtx)
 	srcPathChan, srcCollectorGroup := startPathResolveWorkers(srcVault, pathSender)
@@ -149,7 +149,7 @@ func CopySecrets(inputParams CopyParams) {
 		}
 		copyInputs = append(copyInputs, versionInfo)
 	}
-	copyCtx, copyCtxCancel := context.WithTimeout(context.TODO(), 60*time.Minute)
+	copyCtx, copyCtxCancel := context.WithTimeout(context.TODO(), 2*time.Hour)
 	copySender := NewDataSender(20, 40*time.Millisecond, copyInputs, copyCtx)
 	successChan, errorChan, copierGroup := startSecretCopiers(
 		srcVault,
@@ -494,7 +494,7 @@ func MoveSecrets(inputParams *CopyParams) {
 		os.Exit(10)
 	}
 	srcPath := strings.Trim(inputParams.SrcPath, "/")
-	pathSenderCtx, pathSenderCtxCancel := context.WithTimeout(context.TODO(), 60*time.Minute)
+	pathSenderCtx, pathSenderCtxCancel := context.WithTimeout(context.TODO(), 2*time.Hour)
 	initialInput := []string{srcPath}
 	pathSender := NewDataSender(20, 40*time.Millisecond, initialInput, pathSenderCtx)
 	srcPathChan, srcCollectorGroup := startPathResolveWorkers(srcVault, pathSender)
@@ -548,7 +548,7 @@ func MoveSecrets(inputParams *CopyParams) {
 		}
 		copyInputs = append(copyInputs, versionInfo)
 	}
-	copyCtx, copyCtxCancel := context.WithTimeout(context.TODO(), 60*time.Minute)
+	copyCtx, copyCtxCancel := context.WithTimeout(context.TODO(), 2*time.Hour)
 	copySender := NewDataSender(20, 40*time.Millisecond, copyInputs, copyCtx)
 	successChan, errorChan, copierGroup := startSecretCopiers(
 		srcVault,
@@ -600,7 +600,7 @@ func MoveSecrets(inputParams *CopyParams) {
 		}
 		deleteCount := len(removePaths)
 		logger.Info("starting secret deletion", slog.Int("count", deleteCount))
-		deleteCtx, deleteCtxCancel := context.WithTimeout(context.TODO(), 60*time.Minute)
+		deleteCtx, deleteCtxCancel := context.WithTimeout(context.TODO(), 2*time.Hour)
 		deleteSender := NewDataSender(20, 40*time.Millisecond, removePaths, deleteCtx)
 		go deleteSender.Start()
 		successChan, errorChan, deleteGroup := startDeleteWorkers(
@@ -737,7 +737,7 @@ func DeleteSecrets(inputParams DeleteParams) {
 	}
 	srcPath := strings.Trim(inputParams.SrcPath, "/")
 	logger.Info("resolving paths to delete")
-	pathSenderCtx, pathSenderCtxCancel := context.WithTimeout(context.TODO(), 60*time.Minute)
+	pathSenderCtx, pathSenderCtxCancel := context.WithTimeout(context.TODO(), 2*time.Hour)
 	initialInput := []string{srcPath}
 	pathSender := NewDataSender(20, 40*time.Millisecond, initialInput, pathSenderCtx)
 	srcPathChan, srcCollectorGroup := startPathResolveWorkers(srcVault, pathSender)
@@ -761,7 +761,7 @@ func DeleteSecrets(inputParams DeleteParams) {
 	}
 	deleteCount := len(pathsToDelete)
 	logger.Info("starting secret deletion", slog.Int("count", deleteCount))
-	secretDeleteCtx, secretDeleteCtxCancel := context.WithTimeout(context.TODO(), 60*time.Minute)
+	secretDeleteCtx, secretDeleteCtxCancel := context.WithTimeout(context.TODO(), 2*time.Hour)
 	deleteSender := NewDataSender(20, 40*time.Millisecond, pathsToDelete, secretDeleteCtx)
 	go deleteSender.Start()
 	successChan, errorChan, deleteGroup := startDeleteWorkers(srcVault, deleteSender.GetChannel())
