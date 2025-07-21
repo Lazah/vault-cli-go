@@ -1,7 +1,6 @@
 package vault
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -140,72 +139,6 @@ func (c *VaultClient) NewKv2Vault(mountPath string) (*Kv2Vault, error) {
 		DataUrl:     dataUrl,
 		operLock:    rwMutex,
 	}, nil
-}
-
-func (k *Kv2Vault) GetSecretPaths(startPath string) chan string {
-	secretChan := make(chan string, 100)
-	pathChan := make(chan string, 1000)
-	pathGroup := new(sync.WaitGroup)
-	processorCount := 4
-	pathGroup.Add(processorCount)
-	pathChan <- startPath
-	for range processorCount {
-		go k.getSecretPathsFromPath(secretChan, pathChan, pathGroup)
-	}
-	go k.closePathLookupChans(secretChan, pathChan, pathGroup)
-	return secretChan
-}
-
-func (k *Kv2Vault) getSecretPathsFromPath(
-	respChan, pathChan chan string,
-	pathGroup *sync.WaitGroup,
-) {
-	logger := slog.Default()
-	ctx, cancel := context.WithTimeout(k.VaultClient.ctx, 60*time.Hour)
-	loopCounter := 0
-	defer pathGroup.Done()
-pathLookup:
-	for {
-		select {
-		case <-ctx.Done():
-			logger.Error("path processor context timeout")
-			cancel()
-			break pathLookup
-		case path := <-pathChan:
-			logger.Info("getting keys from path", slog.String("path", path))
-			secrets, folders, err := k.ListPath(path)
-			if err != nil {
-				logger.Error(
-					"an error occured while listing path",
-					slog.String("path", path),
-					slog.String("error", err.Error()),
-				)
-			}
-			for _, folder := range folders {
-				pathChan <- folder
-			}
-			for _, secret := range secrets {
-				respChan <- secret
-			}
-			loopCounter = 0
-		default:
-			if loopCounter > 4 {
-				cancel()
-				logger.Debug("terminating path processor as no work is queued for 5 cycles")
-				break pathLookup
-			}
-			if len(pathChan) == 0 {
-				loopCounter++
-				time.Sleep(100 * time.Millisecond)
-			}
-		}
-	}
-}
-
-func (k *Kv2Vault) closePathLookupChans(respChan, pathChan chan string, pathGroup *sync.WaitGroup) {
-	defer close(pathChan)
-	defer close(respChan)
-	pathGroup.Wait()
 }
 
 func (k *Kv2Vault) checkToken() error {
