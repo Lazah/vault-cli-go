@@ -29,13 +29,28 @@ to quickly create a Cobra application.`,
 		cobra.CheckErr(err)
 		vers, err := cmd.Flags().GetInt("keepVersions")
 		cobra.CheckErr(err)
+		filterPaths, err := cmd.Flags().GetBool("filterPaths")
+		cobra.CheckErr(err)
+		filterExp, err := cmd.Flags().GetString("filterExp")
+		cobra.CheckErr(err)
+		modDstPaths, err := cmd.Flags().GetBool("renameDst")
+		cobra.CheckErr(err)
+		srcPart, err := cmd.Flags().GetString("oldPart")
+		cobra.CheckErr(err)
+		dstPart, err := cmd.Flags().GetString("newPart")
+		cobra.CheckErr(err)
 
 		cmdParams := &internal.CopyParams{
-			SrcMountPath: srcMountPath,
-			SrcPath:      srcPath,
-			DstMountPath: dstMountPath,
-			DstPath:      dstPath,
-			Versions:     vers,
+			SrcMountPath:  srcMountPath,
+			SrcPath:       srcPath,
+			DstMountPath:  dstMountPath,
+			DstPath:       dstPath,
+			Versions:      vers,
+			FilterPaths:   filterPaths,
+			FilterExpStr:  filterExp,
+			ModDstPaths:   modDstPaths,
+			DstPathRepSrc: srcPart,
+			DstPathRepDst: dstPart,
 		}
 		internal.CopySecrets(*cmdParams)
 	},
@@ -59,4 +74,12 @@ func init() {
 		Int("keepVersions", -1, "How many versions to copy to new path. Defaults to '-1' to copy all versions")
 	copyCmd.Flags().String("dstMountPath", "", "Mount path for destination KV2 vault")
 	copyCmd.Flags().String("dstPath", "", "Root key to where data is copied to")
+	copyCmd.Flags().Bool("filterPaths", false, "Determines if source paths should be filtered")
+	copyCmd.Flags().String("filterExp", "", "Source path filter as go regexp")
+	copyCmd.MarkFlagsRequiredTogether("filterPaths", "filterExp")
+	copyCmd.Flags().
+		Bool("renameDst", false, "Determines if destination paths should be manipulated")
+	copyCmd.Flags().String("oldPart", "", "What should be replaced from destination path")
+	copyCmd.Flags().String("newPart", "", "New path part")
+	copyCmd.MarkFlagsRequiredTogether("renameDst", "oldPart", "newPart")
 }

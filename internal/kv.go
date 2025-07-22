@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/url"
 	"os"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -19,11 +20,16 @@ import (
 //from copy file
 
 type CopyParams struct {
-	SrcPath      string
-	DstPath      string
-	SrcMountPath string
-	DstMountPath string
-	Versions     int
+	SrcPath       string
+	DstPath       string
+	SrcMountPath  string
+	DstMountPath  string
+	Versions      int
+	FilterPaths   bool
+	FilterExpStr  string
+	ModDstPaths   bool
+	DstPathRepSrc string
+	DstPathRepDst string
 }
 
 func CopySecrets(inputParams CopyParams) {
@@ -119,6 +125,20 @@ func CopySecrets(inputParams CopyParams) {
 	}
 	pathSender = nil
 	srcPathCollector = nil
+	if inputParams.FilterPaths {
+		logger.Info("filtering paths to copy")
+		exp, err := regexp.Compile(inputParams.FilterExpStr)
+		if err != nil {
+			logger.Error(
+				"an error occured while copiling path match expr",
+				slog.String("error", err.Error()),
+			)
+			duration := time.Since(start)
+			logger.Info("process duration", slog.Duration("duration", duration))
+			os.Exit(10)
+		}
+		srcPaths = filterSrcPaths(exp, srcPaths)
+	}
 	srcCount := len(srcPaths)
 	logger.Info("starting metadata collection", slog.Int("count", srcCount))
 	metaReaderCtx, metaReaderCtxCancel := context.WithTimeout(context.TODO(), 2*time.Hour)
@@ -151,15 +171,9 @@ func CopySecrets(inputParams CopyParams) {
 	secretsToCopy := len(secretVersions)
 	logger.Info("starting secret copy", slog.Int("secretCount", secretsToCopy))
 	dstPath := strings.Trim(inputParams.DstPath, "/")
-	copyInputs := make([]*SecretVersionsToCopy, 0)
-	for _, secretVersion := range secretVersions {
-		trimmedPath := strings.TrimPrefix(secretVersion.secretPath, srcPath)
-		versionInfo := &SecretVersionsToCopy{
-			origPath: secretVersion.secretPath,
-			versions: secretVersion.versions,
-			newPath:  fmt.Sprintf("%s%s", dstPath, trimmedPath),
-		}
-		copyInputs = append(copyInputs, versionInfo)
+	copyInputs := createCopyVersions(secretVersions, srcPath, dstPath)
+	if inputParams.ModDstPaths {
+		renameDstPaths(copyInputs, inputParams.DstPathRepSrc, inputParams.DstPathRepDst)
 	}
 	copyCtx, copyCtxCancel := context.WithTimeout(context.TODO(), 2*time.Hour)
 	copySender := NewDataSender(20, 20*time.Millisecond, copyInputs, copyCtx)
@@ -1135,4 +1149,46 @@ func (d *DataSender[T]) Append(newVals []T) {
 
 func (d *DataSender[T]) CheckErr() error {
 	return nil
+}
+
+func filterSrcPaths(matchExp *regexp.Regexp, secretPaths []string) []string {
+	filteredPaths := make([]string, 0)
+	for _, path := range secretPaths {
+		matchRes := matchExp.FindAllString(path, 1)
+		if matchRes == nil {
+			continue
+		}
+		filteredPaths = append(filteredPaths, path)
+	}
+	return filteredPaths
+}
+
+func renameDstPaths(versions []*SecretVersionsToCopy, srcPart, dstPart string) {
+	for _, version := range versions {
+		entityParts := strings.Split(version.newPath, "/")
+		newPathLen := len(entityParts)
+		entityName := entityParts[newPathLen-1]
+		pathParts := entityParts[0 : newPathLen-1]
+		path := strings.Join(pathParts, "/")
+		path = strings.ReplaceAll(path, srcPart, dstPart)
+		path = strings.Trim(path, "/")
+		version.newPath = fmt.Sprintf("%s/%s", path, entityName)
+	}
+}
+
+func createCopyVersions(
+	versionInfos []*SecretVersions,
+	srcPath, dstPath string,
+) []*SecretVersionsToCopy {
+	versionsToCopy := make([]*SecretVersionsToCopy, 0)
+	for _, versionInfo := range versionInfos {
+		trimmedPath := strings.TrimPrefix(versionInfo.secretPath, srcPath)
+		copyInfo := &SecretVersionsToCopy{
+			origPath: versionInfo.secretPath,
+			versions: versionInfo.versions,
+			newPath:  fmt.Sprintf("%s%s", dstPath, trimmedPath),
+		}
+		versionsToCopy = append(versionsToCopy, copyInfo)
+	}
+	return versionsToCopy
 }
