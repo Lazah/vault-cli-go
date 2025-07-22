@@ -99,7 +99,7 @@ func CopySecrets(inputParams CopyParams) {
 	initialInput := []string{srcPath}
 	pathSender := NewDataSender(20, 40*time.Millisecond, initialInput, pathSenderCtx)
 	srcPathChan, srcCollectorGroup := startPathResolveWorkers(srcVault, pathSender)
-	srcPathCollector := ResultCollector[string]{
+	srcPathCollector := &ResultCollector[string]{
 		resChan:      srcPathChan,
 		collectError: nil,
 	}
@@ -117,15 +117,25 @@ func CopySecrets(inputParams CopyParams) {
 		logger.Info("process duration", slog.Duration("duration", duration))
 		os.Exit(10)
 	}
+	pathSender = nil
+	srcPathCollector = nil
 	srcCount := len(srcPaths)
 	logger.Info("starting metadata collection", slog.Int("count", srcCount))
-	secretPathChan, metadataChan := startMetadataReaders(srcVault, inputParams.Versions)
-	go sendDataToChan(srcPaths, secretPathChan)
-	secretVerCollector := ResultCollector[*SecretVersions]{
+	metaReaderCtx, metaReaderCtxCancel := context.WithTimeout(context.TODO(), 2*time.Hour)
+	metadataPathSender := NewDataSender(20, 20*time.Millisecond, srcPaths, metaReaderCtx)
+	metadataChan, metaReaderGroup := startMetadataReaders(
+		srcVault,
+		metadataPathSender.GetChannel(),
+		inputParams.Versions,
+	)
+	go metadataPathSender.Start()
+	secretVerCollector := &ResultCollector[*SecretVersions]{
 		resChan:      metadataChan,
 		collectError: nil,
 	}
 	secretVerCollector.StartCollect("metadata for copy")
+	metaReaderGroup.Wait()
+	metaReaderCtxCancel()
 	secretVersions, err := secretVerCollector.GetResults()
 	if err != nil {
 		logger.Error(
@@ -136,6 +146,8 @@ func CopySecrets(inputParams CopyParams) {
 		logger.Info("process duration", slog.Duration("duration", duration))
 		os.Exit(10)
 	}
+	secretVerCollector = nil
+	metadataPathSender = nil
 	secretsToCopy := len(secretVersions)
 	logger.Info("starting secret copy", slog.Int("secretCount", secretsToCopy))
 	dstPath := strings.Trim(inputParams.DstPath, "/")
@@ -150,7 +162,7 @@ func CopySecrets(inputParams CopyParams) {
 		copyInputs = append(copyInputs, versionInfo)
 	}
 	copyCtx, copyCtxCancel := context.WithTimeout(context.TODO(), 2*time.Hour)
-	copySender := NewDataSender(20, 40*time.Millisecond, copyInputs, copyCtx)
+	copySender := NewDataSender(20, 20*time.Millisecond, copyInputs, copyCtx)
 	successChan, errorChan, copierGroup := startSecretCopiers(
 		srcVault,
 		dstVault,
@@ -158,12 +170,12 @@ func CopySecrets(inputParams CopyParams) {
 		&copyCtx,
 	)
 	go copySender.Start()
-	failureCollector := ResultCollector[string]{
+	failureCollector := &ResultCollector[string]{
 		resChan:      errorChan,
 		collectError: nil,
 	}
 	go failureCollector.StartCollect("copy failures")
-	successCollector := ResultCollector[string]{
+	successCollector := &ResultCollector[string]{
 		resChan:      successChan,
 		collectError: nil,
 	}
@@ -178,6 +190,7 @@ func CopySecrets(inputParams CopyParams) {
 			slog.String("error", err.Error()),
 		)
 	}
+	copySender = nil
 	failedPaths, err := failureCollector.GetResults()
 	if err != nil {
 		logger.Error(
@@ -188,6 +201,7 @@ func CopySecrets(inputParams CopyParams) {
 		logger.Info("process duration", slog.Duration("duration", duration))
 		os.Exit(10)
 	}
+	failureCollector = nil
 	successfulPaths, err := successCollector.GetResults()
 	if err != nil {
 		logger.Error(
@@ -198,6 +212,7 @@ func CopySecrets(inputParams CopyParams) {
 		logger.Info("process duration", slog.Duration("duration", duration))
 		os.Exit(10)
 	}
+	successCollector = nil
 	if len(failedPaths) == 0 {
 		skipFailurePrint = true
 	}
@@ -227,9 +242,9 @@ func CopySecrets(inputParams CopyParams) {
 
 func startMetadataReaders(
 	srcVault *vault.Kv2Vault,
+	pathChan chan string,
 	verCount int,
-) (chan string, chan *SecretVersions) {
-	pathChan := make(chan string, 100)
+) (chan *SecretVersions, *sync.WaitGroup) {
 	metadataChan := make(chan *SecretVersions, 50)
 	metaReaderGroup := new(sync.WaitGroup)
 	processCount := 2
@@ -238,7 +253,7 @@ func startMetadataReaders(
 		go getMetadataForPaths(pathChan, metadataChan, metaReaderGroup, srcVault, verCount)
 	}
 	go closeMetadataResultChan(metadataChan, metaReaderGroup)
-	return pathChan, metadataChan
+	return metadataChan, metaReaderGroup
 }
 
 type SecretVersions struct {
@@ -384,52 +399,34 @@ copyLoop:
 				logger.Debug("closing copier since input channel has been closed")
 				break copyLoop
 			}
-			logger.Debug(
-				"reading secret versions to copy",
-				slog.String("vault", srcVault.DataUrl.Host),
-				slog.String("path", secretInfo.origPath),
-			)
+			for _, versionNum := range secretInfo.versions {
+				logger.Debug(
+					"reading secret version",
+					slog.String("vault", srcVault.DataUrl.Host),
+					slog.String("path", secretInfo.origPath),
+					slog.Int("version", versionNum),
+				)
+				secretData, err := srcVault.GetSecretVersion(secretInfo.origPath, versionNum)
+				if err != nil {
+					errorChan <- secretInfo.origPath
+					break
+				}
+				logger.Debug(
+					"writing secret version to destination",
+					slog.String("vault", dstVault.DataUrl.Host),
+					slog.String("path", secretInfo.newPath),
+				)
 
-			secrets := getSecretVersions(srcVault, secretInfo)
-
-			logger.Debug(
-				"writing secrets to destination",
-				slog.String("vault", dstVault.DataUrl.Host),
-				slog.String("path", secretInfo.newPath),
-			)
-
-			for _, secret := range secrets {
-				err := writeSecretVersion(dstVault, secret, secretInfo.newPath)
+				err = writeSecretVersion(dstVault, secretData, secretInfo.newPath)
 				if err != nil {
 					errorChan <- secretInfo.origPath
 					break
 				}
 				successChan <- secretInfo.origPath
 			}
-		}
-	}
-}
 
-func getSecretVersions(
-	srcVault *vault.Kv2Vault,
-	versionInfo *SecretVersionsToCopy,
-) []*vault.Kv2SecretResp {
-	logger := slog.Default()
-	secretData := make([]*vault.Kv2SecretResp, 0)
-	for _, versionNum := range versionInfo.versions {
-		secret, err := srcVault.GetSecretVersion(versionInfo.origPath, versionNum)
-		if err != nil {
-			logger.Error(
-				"failed to get data for secret version",
-				slog.String("path", versionInfo.origPath),
-				slog.Int("version", versionNum),
-				slog.String("error", err.Error()),
-			)
-			continue
 		}
-		secretData = append(secretData, secret)
 	}
-	return secretData
 }
 
 func writeSecretVersion(
@@ -497,12 +494,12 @@ func MoveSecrets(inputParams *CopyParams) {
 	pathSenderCtx, pathSenderCtxCancel := context.WithTimeout(context.TODO(), 2*time.Hour)
 	initialInput := []string{srcPath}
 	pathSender := NewDataSender(20, 40*time.Millisecond, initialInput, pathSenderCtx)
+	go pathSender.Start()
 	srcPathChan, srcCollectorGroup := startPathResolveWorkers(srcVault, pathSender)
-	srcPathCollector := ResultCollector[string]{
+	srcPathCollector := &ResultCollector[string]{
 		resChan:      srcPathChan,
 		collectError: nil,
 	}
-	go pathSender.Start()
 	go srcPathCollector.StartCollect("paths to move")
 	srcCollectorGroup.Wait()
 	pathSenderCtxCancel()
@@ -516,15 +513,25 @@ func MoveSecrets(inputParams *CopyParams) {
 		logger.Info("process duration", slog.Duration("duration", duration))
 		os.Exit(10)
 	}
+	pathSender = nil
+	srcPathCollector = nil
 	srcCount := len(srcPaths)
 	logger.Info("starting metadata collection", slog.Int("count", srcCount))
-	secretPathChan, metadataChan := startMetadataReaders(srcVault, inputParams.Versions)
-	go sendDataToChan(srcPaths, secretPathChan)
-	secretVerCollector := ResultCollector[*SecretVersions]{
+	metaReaderCtx, metaReaderCtxCancel := context.WithTimeout(context.TODO(), 2*time.Hour)
+	metadataPathSender := NewDataSender(20, 20*time.Millisecond, srcPaths, metaReaderCtx)
+	go metadataPathSender.Start()
+	metadataChan, metaReaderGroup := startMetadataReaders(
+		srcVault,
+		metadataPathSender.GetChannel(),
+		inputParams.Versions,
+	)
+	secretVerCollector := &ResultCollector[*SecretVersions]{
 		resChan:      metadataChan,
 		collectError: nil,
 	}
 	secretVerCollector.StartCollect("metadata for move")
+	metaReaderGroup.Wait()
+	metaReaderCtxCancel()
 	secretVersions, err := secretVerCollector.GetResults()
 	if err != nil {
 		logger.Error(
@@ -535,8 +542,10 @@ func MoveSecrets(inputParams *CopyParams) {
 		logger.Info("process duration", slog.Duration("duration", duration))
 		os.Exit(10)
 	}
+	metadataPathSender = nil
+	secretVerCollector = nil
 	secretsToCopy := len(secretVersions)
-	logger.Info("starting secret copy", slog.Int("secretCount", secretsToCopy))
+	logger.Info("starting secret copy", slog.Int("count", secretsToCopy))
 	dstPath := strings.Trim(inputParams.DstPath, "/")
 	copyInputs := make([]*SecretVersionsToCopy, 0)
 	for _, secretVersion := range secretVersions {
@@ -557,12 +566,12 @@ func MoveSecrets(inputParams *CopyParams) {
 		&copyCtx,
 	)
 	go copySender.Start()
-	copyfailureCol := ResultCollector[string]{
+	copyfailureCol := &ResultCollector[string]{
 		resChan:      errorChan,
 		collectError: nil,
 	}
 	go copyfailureCol.StartCollect("copy failures")
-	copySuccessCol := ResultCollector[string]{
+	copySuccessCol := &ResultCollector[string]{
 		resChan:      successChan,
 		collectError: nil,
 	}
@@ -579,6 +588,8 @@ func MoveSecrets(inputParams *CopyParams) {
 		)
 		deleteSecrets = false
 	}
+	copySender = nil
+	copyfailureCol = nil
 	if len(copyFailedPaths) == 0 {
 		skipFailurePrint = true
 	}
@@ -598,6 +609,7 @@ func MoveSecrets(inputParams *CopyParams) {
 				slog.String("error", err.Error()),
 			)
 		}
+		copySuccessCol = nil
 		deleteCount := len(removePaths)
 		logger.Info("starting secret deletion", slog.Int("count", deleteCount))
 		deleteCtx, deleteCtxCancel := context.WithTimeout(context.TODO(), 2*time.Hour)
@@ -607,12 +619,12 @@ func MoveSecrets(inputParams *CopyParams) {
 			srcVault,
 			deleteSender.GetChannel(),
 		)
-		delFailureCollector := ResultCollector[string]{
+		delFailureCollector := &ResultCollector[string]{
 			resChan:      errorChan,
 			collectError: nil,
 		}
 		go delFailureCollector.StartCollect("delete failures")
-		delSuccessCollector := ResultCollector[string]{
+		delSuccessCollector := &ResultCollector[string]{
 			resChan:      successChan,
 			collectError: nil,
 		}
@@ -620,6 +632,7 @@ func MoveSecrets(inputParams *CopyParams) {
 
 		deleteGroup.Wait()
 		deleteCtxCancel()
+		deleteSender = nil
 		_, err = delSuccessCollector.GetResults()
 		if err != nil {
 			logger.Error(
@@ -627,6 +640,7 @@ func MoveSecrets(inputParams *CopyParams) {
 				slog.String("error", err.Error()),
 			)
 		}
+		delSuccessCollector = nil
 		delFailedPaths, err := delFailureCollector.GetResults()
 		if err != nil {
 			logger.Error(
@@ -634,6 +648,7 @@ func MoveSecrets(inputParams *CopyParams) {
 				slog.String("error", err.Error()),
 			)
 		}
+		delFailureCollector = nil
 		if len(delFailedPaths) == 0 {
 			fmt.Println("failed to delete the following paths during move operation:")
 			for _, copyFailedPath := range copyFailedPaths {
@@ -741,7 +756,7 @@ func DeleteSecrets(inputParams DeleteParams) {
 	initialInput := []string{srcPath}
 	pathSender := NewDataSender(20, 40*time.Millisecond, initialInput, pathSenderCtx)
 	srcPathChan, srcCollectorGroup := startPathResolveWorkers(srcVault, pathSender)
-	srcPathCollector := ResultCollector[string]{
+	srcPathCollector := &ResultCollector[string]{
 		resChan:      srcPathChan,
 		collectError: nil,
 	}
@@ -759,17 +774,19 @@ func DeleteSecrets(inputParams DeleteParams) {
 		logger.Info("process duration", slog.Duration("duration", duration))
 		os.Exit(10)
 	}
+	pathSender = nil
+	srcPathCollector = nil
 	deleteCount := len(pathsToDelete)
 	logger.Info("starting secret deletion", slog.Int("count", deleteCount))
 	secretDeleteCtx, secretDeleteCtxCancel := context.WithTimeout(context.TODO(), 2*time.Hour)
-	deleteSender := NewDataSender(20, 40*time.Millisecond, pathsToDelete, secretDeleteCtx)
+	deleteSender := NewDataSender(20, 20*time.Millisecond, pathsToDelete, secretDeleteCtx)
 	go deleteSender.Start()
 	successChan, errorChan, deleteGroup := startDeleteWorkers(srcVault, deleteSender.GetChannel())
-	successCollector := ResultCollector[string]{
+	successCollector := &ResultCollector[string]{
 		resChan:      successChan,
 		collectError: nil,
 	}
-	failureCollector := ResultCollector[string]{
+	failureCollector := &ResultCollector[string]{
 		resChan:      errorChan,
 		collectError: nil,
 	}
@@ -787,6 +804,8 @@ func DeleteSecrets(inputParams DeleteParams) {
 		logger.Info("process duration", slog.Duration("duration", duration))
 		os.Exit(10)
 	}
+	deleteSender = nil
+	successCollector = nil
 	failures, err := failureCollector.GetResults()
 	if err != nil {
 		logger.Error(
@@ -801,6 +820,7 @@ func DeleteSecrets(inputParams DeleteParams) {
 			logger.Error("failed to revoke session token")
 		}
 	}
+	failureCollector = nil
 	successCount := len(successes)
 	failureCount := len(failures)
 	logger.Info("paths deleted", slog.Int("count", successCount))
@@ -900,7 +920,6 @@ func deleteSecrets(
 ) {
 	logger := slog.Default()
 	ctx, ctxCancel := context.WithTimeout(context.TODO(), 60*time.Minute)
-	ticker := time.NewTicker(50 * time.Millisecond)
 	defer deleteGroup.Done()
 	defer ctxCancel()
 deleteLoop:
@@ -909,8 +928,7 @@ deleteLoop:
 		case <-ctx.Done():
 			logger.Error("stopping deletion: context timeout reached")
 			break deleteLoop
-		case <-ticker.C:
-			path, ok := <-pathChan
+		case path, ok := <-pathChan:
 			if !ok {
 				logger.Debug("terminating delete processor as input channel closed")
 				break deleteLoop
@@ -966,7 +984,7 @@ pathLookup:
 			logger.Debug("listing items from path", slog.String("path", path))
 			secrets, folders, err := srcVault.ListPath(path)
 			if err != nil {
-				logger.Error("an error occured while listing path %s: %w", path, err)
+				logger.Error("an error occured while listing path", slog.String("path", path), slog.String("error", err.Error()))
 				continue pathLookup
 			}
 			for _, secret := range secrets {
@@ -984,13 +1002,6 @@ func closePathLookupChans(respChan chan string, pathGroup *sync.WaitGroup) {
 	pathGroup.Wait()
 }
 
-func sendDataToChan[T any](inputVals []T, targetChan chan T) {
-	for _, val := range inputVals {
-		targetChan <- val
-	}
-	close(targetChan)
-}
-
 type ResultCollector[T any] struct {
 	resItems     []T
 	resChan      chan T
@@ -1001,7 +1012,7 @@ func (r *ResultCollector[T]) StartCollect(resType string) {
 	logger := slog.Default()
 	msg := fmt.Sprintf("%s collected", resType)
 	collectTicker := time.NewTicker(10 * time.Second)
-	ctx, ctxCancel := context.WithTimeout(context.TODO(), 60*time.Minute)
+	ctx, ctxCancel := context.WithTimeout(context.TODO(), 2*time.Hour)
 	r.resItems = make([]T, 0)
 
 collectLoop:
@@ -1098,6 +1109,8 @@ processLoop:
 			if len(d.inputVals) > 0 && len(d.sendChan) < d.chanLength {
 				d.sendChan <- d.inputVals[0]
 				loopCounter = 0
+			} else if len(d.inputVals) == 0 {
+				time.Sleep(100 * time.Millisecond)
 			}
 		}
 		if len(d.inputVals) > 0 {
