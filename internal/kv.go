@@ -314,6 +314,9 @@ func closeMetadataResultChan(
 func getSecretVersionsToCopy(secretMetadata vault.Kv2MetadataResp, keep int) []int {
 	validVersions := filterDeletedSecretVersions(secretMetadata.Data.Versions)
 	slices.Sort(validVersions)
+	if keep == -1 {
+		return validVersions
+	}
 	slices.Reverse(validVersions)
 	if len(validVersions) > keep {
 		validVersions = validVersions[:keep]
