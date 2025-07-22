@@ -56,7 +56,7 @@ func init() {
 	moveCmd.Flags().String("srcMountPath", "", "Mount path for source KV2 vault")
 	moveCmd.Flags().String("srcPath", "", "Root key from which to start copy")
 	moveCmd.Flags().
-		Int("keepVersions", 1, "How many versions to copy to new path. Default only latest")
+		Int("keepVersions", -1, "How many versions to copy to new path. Default to '-1' to keep all versions")
 	moveCmd.Flags().String("dstMountPath", "", "Mount path for destination KV2 vault")
 	moveCmd.Flags().String("dstPath", "", "Root key to where data is copied to")
 }
