@@ -125,8 +125,10 @@ func CopySecrets(inputParams CopyParams) {
 	}
 	pathSender = nil
 	srcPathCollector = nil
+	var srcCount int
 	if inputParams.FilterPaths {
-		logger.Info("filtering paths to copy")
+		srcCount = len(srcPaths)
+		logger.Info("filtering paths to copy", slog.Int("countBefore", srcCount))
 		exp, err := regexp.Compile(inputParams.FilterExpStr)
 		if err != nil {
 			logger.Error(
@@ -139,7 +141,7 @@ func CopySecrets(inputParams CopyParams) {
 		}
 		srcPaths = filterSrcPaths(exp, srcPaths)
 	}
-	srcCount := len(srcPaths)
+	srcCount = len(srcPaths)
 	logger.Info("starting metadata collection", slog.Int("count", srcCount))
 	metaReaderCtx, metaReaderCtxCancel := context.WithTimeout(context.TODO(), 2*time.Hour)
 	metadataPathSender := NewDataSender(20, 20*time.Millisecond, srcPaths, metaReaderCtx)
@@ -386,11 +388,12 @@ func startSecretCopiers(
 			copyContext,
 		)
 	}
-	go closeCopyChans(errorChan, copierGroup)
+	go closeCopyChans(successChan, errorChan, copierGroup)
 	return successChan, errorChan, copierGroup
 }
 
-func closeCopyChans(errorChan chan string, copyGroup *sync.WaitGroup) {
+func closeCopyChans(successChan, errorChan chan string, copyGroup *sync.WaitGroup) {
+	defer close(successChan)
 	defer close(errorChan)
 	copyGroup.Wait()
 }
@@ -532,7 +535,23 @@ func MoveSecrets(inputParams *CopyParams) {
 	}
 	pathSender = nil
 	srcPathCollector = nil
-	srcCount := len(srcPaths)
+	var srcCount int
+	if inputParams.FilterPaths {
+		srcCount = len(srcPaths)
+		logger.Info("filtering paths to copy", slog.Int("countBefore", srcCount))
+		exp, err := regexp.Compile(inputParams.FilterExpStr)
+		if err != nil {
+			logger.Error(
+				"an error occured while copiling path match expr",
+				slog.String("error", err.Error()),
+			)
+			duration := time.Since(start)
+			logger.Info("process duration", slog.Duration("duration", duration))
+			os.Exit(10)
+		}
+		srcPaths = filterSrcPaths(exp, srcPaths)
+	}
+	srcCount = len(srcPaths)
 	logger.Info("starting metadata collection", slog.Int("count", srcCount))
 	metaReaderCtx, metaReaderCtxCancel := context.WithTimeout(context.TODO(), 2*time.Hour)
 	metadataPathSender := NewDataSender(20, 20*time.Millisecond, srcPaths, metaReaderCtx)
@@ -564,25 +583,19 @@ func MoveSecrets(inputParams *CopyParams) {
 	secretsToCopy := len(secretVersions)
 	logger.Info("starting secret copy", slog.Int("count", secretsToCopy))
 	dstPath := strings.Trim(inputParams.DstPath, "/")
-	copyInputs := make([]*SecretVersionsToCopy, 0)
-	for _, secretVersion := range secretVersions {
-		trimmedPath := strings.TrimPrefix(secretVersion.secretPath, srcPath)
-		versionInfo := &SecretVersionsToCopy{
-			origPath: secretVersion.secretPath,
-			versions: secretVersion.versions,
-			newPath:  fmt.Sprintf("%s%s", dstPath, trimmedPath),
-		}
-		copyInputs = append(copyInputs, versionInfo)
+	copyInputs := createCopyVersions(secretVersions, srcPath, dstPath)
+	if inputParams.ModDstPaths {
+		renameDstPaths(copyInputs, inputParams.DstPathRepSrc, inputParams.DstPathRepDst)
 	}
 	copyCtx, copyCtxCancel := context.WithTimeout(context.TODO(), 2*time.Hour)
 	copySender := NewDataSender(20, 40*time.Millisecond, copyInputs, copyCtx)
+	go copySender.Start()
 	successChan, errorChan, copierGroup := startSecretCopiers(
 		srcVault,
 		dstVault,
 		copySender.GetChannel(),
 		&copyCtx,
 	)
-	go copySender.Start()
 	copyfailureCol := &ResultCollector[string]{
 		resChan:      errorChan,
 		collectError: nil,
@@ -1042,7 +1055,6 @@ collectLoop:
 		case res, ok := <-r.resChan:
 			if !ok {
 				logger.Debug("terminating result collector since result channel is closed")
-				ctxCancel()
 				break collectLoop
 			}
 			r.resItems = append(r.resItems, res)
@@ -1051,6 +1063,7 @@ collectLoop:
 			logger.Info(msg, slog.Int("count", resultsCollected))
 		}
 	}
+
 	ctxCancel()
 }
 
