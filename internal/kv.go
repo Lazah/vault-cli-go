@@ -1067,7 +1067,7 @@ func copyRecords(
 ) ([]string, []string, error) {
 	logger := slog.Default()
 	secretsToCopy := len(srcObjs)
-	logger.Info("starting secret copy", slog.Int("secretCount", secretsToCopy))
+	logger.Info("starting secret copy", slog.Int("count", secretsToCopy))
 	copyCtx, copyCtxCancel := context.WithTimeout(context.TODO(), 2*time.Hour)
 	copySender := NewDataSender(20, 20*time.Millisecond, srcObjs, copyCtx)
 	successChan, errorChan, copierGroup := startSecretCopiers(
@@ -1081,12 +1081,12 @@ func copyRecords(
 		resChan:      errorChan,
 		collectError: nil,
 	}
-	go failureCollector.StartCollect("copy failures")
+	go failureCollector.StartCollect("paths/versions copy failed")
 	successCollector := &ResultCollector[string]{
 		resChan:      successChan,
 		collectError: nil,
 	}
-	go successCollector.StartCollect("paths copied")
+	go successCollector.StartCollect("paths/versions copy succeeded")
 	copierGroup.Wait()
 	copyCtxCancel()
 	err := copySender.CheckErr()
