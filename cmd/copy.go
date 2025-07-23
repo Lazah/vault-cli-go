@@ -40,7 +40,7 @@ to quickly create a Cobra application.`,
 		dstPart, err := cmd.Flags().GetString("newPart")
 		cobra.CheckErr(err)
 
-		cmdParams := &internal.CopyParams{
+		cmdParams := &internal.KvParams{
 			SrcMountPath:  srcMountPath,
 			SrcPath:       srcPath,
 			DstMountPath:  dstMountPath,
