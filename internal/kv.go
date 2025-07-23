@@ -359,9 +359,9 @@ copyLoop:
 					slog.String("vault", dstVault.DataUrl.Host),
 					slog.String("path", secretInfo.newPath),
 				)
-
 				err = writeSecretVersion(dstVault, secretData, secretInfo.newPath)
 				if err != nil {
+					logger.Error("failed to copy secret version", slog.String("path", secretInfo.origPath), slog.Int("version", versionNum))
 					errorChan <- secretInfo.origPath
 					break
 				}
