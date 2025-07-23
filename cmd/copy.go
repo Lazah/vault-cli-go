@@ -41,16 +41,16 @@ to quickly create a Cobra application.`,
 		cobra.CheckErr(err)
 
 		cmdParams := &internal.KvParams{
-			SrcMountPath:  srcMountPath,
-			SrcPath:       srcPath,
-			DstMountPath:  dstMountPath,
-			DstPath:       dstPath,
-			Versions:      vers,
-			FilterPaths:   filterPaths,
-			FilterExpStr:  filterExp,
-			ModDstPaths:   modDstPaths,
-			DstPathRepSrc: srcPart,
-			DstPathRepDst: dstPart,
+			SrcMountPath: srcMountPath,
+			SrcPath:      srcPath,
+			DstMountPath: dstMountPath,
+			DstPath:      dstPath,
+			Versions:     vers,
+			FilterPaths:  filterPaths,
+			FilterExpStr: filterExp,
+			ModDstPaths:  modDstPaths,
+			OldPathPart:  srcPart,
+			NewPathPart:  dstPart,
 		}
 		internal.CopySecrets(*cmdParams)
 	},

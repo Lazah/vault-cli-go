@@ -20,16 +20,16 @@ import (
 //from copy file
 
 type KvParams struct {
-	SrcPath       string
-	DstPath       string
-	SrcMountPath  string
-	DstMountPath  string
-	Versions      int
-	FilterPaths   bool
-	FilterExpStr  string
-	ModDstPaths   bool
-	DstPathRepSrc string
-	DstPathRepDst string
+	SrcPath      string
+	DstPath      string
+	SrcMountPath string
+	DstMountPath string
+	Versions     int
+	FilterPaths  bool
+	FilterExpStr string
+	ModDstPaths  bool
+	OldPathPart  string
+	NewPathPart  string
 }
 
 func CopySecrets(inputParams KvParams) {
@@ -138,7 +138,7 @@ func CopySecrets(inputParams KvParams) {
 	dstPath := strings.Trim(inputParams.DstPath, "/")
 	copyInputs := createCopyVersions(secretVersions, srcPath, dstPath)
 	if inputParams.ModDstPaths {
-		renameDstPaths(copyInputs, inputParams.DstPathRepSrc, inputParams.DstPathRepDst)
+		renameDstPaths(copyInputs, inputParams.OldPathPart, inputParams.NewPathPart)
 	}
 	copySuccess, copyFails, err := copyRecords(copyInputs, srcVault, dstVault)
 	if err != nil {
@@ -484,7 +484,7 @@ func MoveSecrets(inputParams *KvParams) {
 	dstPath := strings.Trim(inputParams.DstPath, "/")
 	copyInputs := createCopyVersions(secretVersions, srcPath, dstPath)
 	if inputParams.ModDstPaths {
-		renameDstPaths(copyInputs, inputParams.DstPathRepSrc, inputParams.DstPathRepDst)
+		renameDstPaths(copyInputs, inputParams.OldPathPart, inputParams.NewPathPart)
 	}
 	copySuccess, copyFail, err := copyRecords(copyInputs, srcVault, dstVault)
 	if err != nil {
@@ -633,90 +633,38 @@ func DeleteSecrets(inputParams DeleteParams) {
 		os.Exit(10)
 	}
 	srcPath := strings.Trim(inputParams.SrcPath, "/")
-	logger.Info("resolving paths to delete")
-	pathSenderCtx, pathSenderCtxCancel := context.WithTimeout(context.TODO(), 2*time.Hour)
-	initialInput := []string{srcPath}
-	pathSender := NewDataSender(20, 40*time.Millisecond, initialInput, pathSenderCtx)
-	srcPathChan, srcCollectorGroup := startPathResolveWorkers(srcVault, pathSender)
-	srcPathCollector := &ResultCollector[string]{
-		resChan:      srcPathChan,
-		collectError: nil,
-	}
-	go pathSender.Start()
-	go srcPathCollector.StartCollect("paths to delete")
-	srcCollectorGroup.Wait()
-	pathSenderCtxCancel()
-	pathsToDelete, err := srcPathCollector.GetResults()
+	srcPaths, err := getSrcPaths(srcPath, srcVault)
 	if err != nil {
 		logger.Error(
-			"an error occured while collecting secret paths for deletion",
+			"failed to get source paths for records",
+			slog.String("path", srcPath),
 			slog.String("error", err.Error()),
 		)
 		duration := time.Since(start)
 		logger.Info("process duration", slog.Duration("duration", duration))
 		os.Exit(10)
 	}
-	pathSender = nil
-	srcPathCollector = nil
-	deleteCount := len(pathsToDelete)
-	logger.Info("starting secret deletion", slog.Int("count", deleteCount))
-	secretDeleteCtx, secretDeleteCtxCancel := context.WithTimeout(context.TODO(), 2*time.Hour)
-	deleteSender := NewDataSender(20, 20*time.Millisecond, pathsToDelete, secretDeleteCtx)
-	go deleteSender.Start()
-	successChan, errorChan, deleteGroup := startDeleteWorkers(srcVault, deleteSender.GetChannel())
-	successCollector := &ResultCollector[string]{
-		resChan:      successChan,
-		collectError: nil,
-	}
-	failureCollector := &ResultCollector[string]{
-		resChan:      errorChan,
-		collectError: nil,
-	}
-	go successCollector.StartCollect("deleted paths")
-	go failureCollector.StartCollect("delete failures")
-	deleteGroup.Wait()
-	secretDeleteCtxCancel()
-	successes, err := successCollector.GetResults()
+	delSuccess, delFailure, err := deleteRecords(srcPaths, srcVault)
 	if err != nil {
-		logger.Error(
-			"an error occured while collecting deletion results",
-			slog.String("error", err.Error()),
-		)
+		logger.Error("an error occured while deleting records", slog.String("error", err.Error()))
 		duration := time.Since(start)
 		logger.Info("process duration", slog.Duration("duration", duration))
 		os.Exit(10)
 	}
-	deleteSender = nil
-	successCollector = nil
-	failures, err := failureCollector.GetResults()
-	if err != nil {
-		logger.Error(
-			"an error occured while collecting deletion results",
-			slog.String("error", err.Error()),
-		)
-		duration := time.Since(start)
-		logger.Info("process duration", slog.Duration("duration", duration))
-		os.Exit(10)
-		err = srcClient.RevokeToken()
-		if err != nil {
-			logger.Error("failed to revoke session token")
-		}
-	}
-	failureCollector = nil
-	successCount := len(successes)
-	failureCount := len(failures)
+	successCount := len(delSuccess)
+	failureCount := len(delFailure)
 	logger.Info("paths deleted", slog.Int("count", successCount))
 	logger.Info("paths failed to delete", slog.Int("count", failureCount))
 	if failureCount > 0 {
 		fmt.Println("failed to delete following paths:")
-		for _, path := range failures {
+		for _, path := range delFailure {
 			fmt.Println(path)
 		}
 	}
 	if logger.Handler().Enabled(context.TODO(), slog.LevelDebug) {
 		if successCount > 0 {
 			fmt.Println("successfully deleted following paths:")
-			for _, path := range successes {
+			for _, path := range delSuccess {
 				fmt.Println(path)
 			}
 		}
