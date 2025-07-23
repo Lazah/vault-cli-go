@@ -613,14 +613,26 @@ func MoveSecrets(inputParams *CopyParams) {
 	copyFailedPaths, err := copyfailureCol.GetResults()
 	if err != nil {
 		logger.Error(
-			"an error occured while collecting copy failures",
+			"an error occured while collecting copy failures... will not delete paths",
 			slog.String("error", err.Error()),
 		)
 		deleteSecrets = false
 	}
+	removePaths, err := copySuccessCol.GetResults()
+	if err != nil {
+		logger.Error(
+			"an error occured while collecting copy sucesses",
+			slog.String("error", err.Error()),
+		)
+	}
+	copySuccessCol = nil
 	copySender = nil
 	copyfailureCol = nil
-	if len(copyFailedPaths) == 0 {
+	copyCount := len(removePaths)
+	copyFailCount := len(copyFailedPaths)
+	logger.Info("paths copied for move operation", slog.Int("count", copyCount))
+	logger.Info("paths failed to copy for move operation", slog.Int("count", copyFailCount))
+	if copyFailCount == 0 {
 		skipFailurePrint = true
 	}
 
@@ -632,14 +644,6 @@ func MoveSecrets(inputParams *CopyParams) {
 	}
 
 	if deleteSecrets {
-		removePaths, err := copySuccessCol.GetResults()
-		if err != nil {
-			logger.Error(
-				"an error occured while collecting copy sucesses",
-				slog.String("error", err.Error()),
-			)
-		}
-		copySuccessCol = nil
 		deleteCount := len(removePaths)
 		logger.Info("starting secret deletion", slog.Int("count", deleteCount))
 		deleteCtx, deleteCtxCancel := context.WithTimeout(context.TODO(), 2*time.Hour)
