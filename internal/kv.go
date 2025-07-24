@@ -34,6 +34,7 @@ type KvParams struct {
 
 func CopySecrets(inputParams KvParams) {
 	logger := slog.Default()
+	mainCtx := CreateMainCtx()
 	start := time.Now()
 	var cfg ClientConfig
 	err := viper.Unmarshal(&cfg)
@@ -99,8 +100,9 @@ func CopySecrets(inputParams KvParams) {
 		logger.Info("process duration", slog.Duration("duration", duration))
 		os.Exit(10)
 	}
+	logger.Info("Collecting secrets for copy")
 	srcPath := strings.Trim(inputParams.SrcPath, "/")
-	srcPaths, err := getSrcPaths(srcPath, srcVault)
+	srcPaths, err := getSrcPaths(mainCtx, srcPath, srcVault)
 	if err != nil {
 		logger.Error(
 			"an error occured while collecting paths to copy",
@@ -396,6 +398,7 @@ func writeSecretVersion(
 
 func MoveSecrets(inputParams *KvParams) {
 	logger := slog.Default()
+	mainCtx := CreateMainCtx()
 	var cfg ClientConfig
 	start := time.Now()
 	err := viper.Unmarshal(&cfg)
@@ -445,8 +448,9 @@ func MoveSecrets(inputParams *KvParams) {
 		logger.Info("process duration", slog.Duration("duration", duration))
 		os.Exit(10)
 	}
+	logger.Info("Collecting secrets for move")
 	srcPath := strings.Trim(inputParams.SrcPath, "/")
-	srcPaths, err := getSrcPaths(srcPath, srcVault)
+	srcPaths, err := getSrcPaths(mainCtx, srcPath, srcVault)
 	if err != nil {
 		logger.Error(
 			"an error occured while getting source paths",
@@ -601,6 +605,7 @@ type DeleteParams struct {
 
 func DeleteSecrets(inputParams DeleteParams) {
 	logger := slog.Default()
+	mainCtx := CreateMainCtx()
 	start := time.Now()
 	var cfg ClientConfig
 	err := viper.Unmarshal(&cfg)
@@ -632,8 +637,9 @@ func DeleteSecrets(inputParams DeleteParams) {
 		logger.Info("process duration", slog.Duration("duration", duration))
 		os.Exit(10)
 	}
+	logger.Info("Collecting secrets for deletion")
 	srcPath := strings.Trim(inputParams.SrcPath, "/")
-	srcPaths, err := getSrcPaths(srcPath, srcVault)
+	srcPaths, err := getSrcPaths(mainCtx, srcPath, srcVault)
 	if err != nil {
 		logger.Error(
 			"failed to get source paths for records",
@@ -1006,21 +1012,21 @@ func createCopyVersions(
 	return versionsToCopy
 }
 
-func getSrcPaths(srcPath string, srcVault *vault.Kv2Vault) ([]string, error) {
+func getSrcPaths(ctx context.Context, srcPath string, srcVault *vault.Kv2Vault) ([]string, error) {
 	logger := slog.Default()
-	logger.Info("resolving paths to copy")
-	pathSenderCtx, pathSenderCtxCancel := context.WithTimeout(context.TODO(), 2*time.Hour)
+	logger.Info("resolving paths for operation")
 	initialInput := []string{srcPath}
-	pathSender := NewDataSender(20, 40*time.Millisecond, initialInput, pathSenderCtx)
+	processCtx, ProcessCtxCancel := context.WithTimeout(ctx, 1*time.Hour)
+	pathSender := NewDataSender(20, 40*time.Millisecond, initialInput, processCtx)
 	srcPathChan, srcCollectorGroup := startPathResolveWorkers(srcVault, pathSender)
 	srcPathCollector := &ResultCollector[string]{
 		resChan:      srcPathChan,
 		collectError: nil,
 	}
 	go pathSender.Start()
-	go srcPathCollector.StartCollect("paths to copy")
+	go srcPathCollector.StartCollect("paths resolved")
 	srcCollectorGroup.Wait()
-	pathSenderCtxCancel()
+	ProcessCtxCancel()
 	srcPaths, err := srcPathCollector.GetResults()
 	if err != nil {
 		return nil, fmt.Errorf("an error occured while collecting results: %w", err)
