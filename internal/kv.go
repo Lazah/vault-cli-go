@@ -127,7 +127,7 @@ func CopySecrets(inputParams KvParams) {
 		}
 		srcPaths = filterSrcPaths(exp, srcPaths)
 	}
-	secretVersions, err := getMetadataForPaths(srcPaths, inputParams.Versions, srcVault)
+	secretVersions, err := getMetadataForPaths(mainCtx, srcPaths, inputParams.Versions, srcVault)
 	if err != nil {
 		logger.Error(
 			"an error occured while collecting metadata",
@@ -475,7 +475,7 @@ func MoveSecrets(inputParams *KvParams) {
 		}
 		srcPaths = filterSrcPaths(exp, srcPaths)
 	}
-	secretVersions, err := getMetadataForPaths(srcPaths, inputParams.Versions, srcVault)
+	secretVersions, err := getMetadataForPaths(mainCtx, srcPaths, inputParams.Versions, srcVault)
 	if err != nil {
 		logger.Error(
 			"an error occured while getting metadata for paths",
@@ -521,7 +521,7 @@ func MoveSecrets(inputParams *KvParams) {
 	if shouldDelete {
 		deleteSet := NewSet(copySuccess...)
 		removePaths := deleteSet.GetValues()
-		delSuccess, delFailure, err := deleteRecords(removePaths, srcVault)
+		delSuccess, delFailure, err := deleteRecords(mainCtx, removePaths, srcVault)
 		if err != nil {
 			logger.Error(
 				"an error occured while deleting records",
@@ -650,7 +650,7 @@ func DeleteSecrets(inputParams DeleteParams) {
 		logger.Info("process duration", slog.Duration("duration", duration))
 		os.Exit(10)
 	}
-	delSuccess, delFailure, err := deleteRecords(srcPaths, srcVault)
+	delSuccess, delFailure, err := deleteRecords(mainCtx, srcPaths, srcVault)
 	if err != nil {
 		logger.Error("an error occured while deleting records", slog.String("error", err.Error()))
 		duration := time.Since(start)
@@ -842,20 +842,26 @@ type ResultCollector[T any] struct {
 	resItems     []T
 	resChan      chan T
 	collectError error
+	ctx          context.Context
 }
 
+func NewResCollector[T any](ctx context.Context, results chan T) *ResultCollector[T] {
+	output := new(ResultCollector[T])
+	output.resChan = results
+	output.ctx = ctx
+	return output
+}
 func (r *ResultCollector[T]) StartCollect(resType string) {
 	logger := slog.Default()
 	msg := fmt.Sprintf("%s collected", resType)
 	collectTicker := time.NewTicker(10 * time.Second)
-	ctx, ctxCancel := context.WithTimeout(context.TODO(), 2*time.Hour)
 	r.resItems = make([]T, 0)
 
 collectLoop:
 	for {
 		select {
-		case <-ctx.Done():
-			r.collectError = fmt.Errorf("collect context terminated: %w", ctx.Err())
+		case <-r.ctx.Done():
+			r.collectError = fmt.Errorf("collect context terminated with error: %w", r.ctx.Err())
 			break collectLoop
 
 		case res, ok := <-r.resChan:
@@ -869,8 +875,6 @@ collectLoop:
 			logger.Info(msg, slog.Int("count", resultsCollected))
 		}
 	}
-
-	ctxCancel()
 }
 
 func (r *ResultCollector[T]) GetResults() ([]T, error) {
@@ -1019,10 +1023,7 @@ func getSrcPaths(ctx context.Context, srcPath string, srcVault *vault.Kv2Vault) 
 	processCtx, ProcessCtxCancel := context.WithTimeout(ctx, 1*time.Hour)
 	pathSender := NewDataSender(20, 40*time.Millisecond, initialInput, processCtx)
 	srcPathChan, srcCollectorGroup := startPathResolveWorkers(srcVault, pathSender)
-	srcPathCollector := &ResultCollector[string]{
-		resChan:      srcPathChan,
-		collectError: nil,
-	}
+	srcPathCollector := NewResCollector(processCtx, srcPathChan)
 	go pathSender.Start()
 	go srcPathCollector.StartCollect("paths resolved")
 	srcCollectorGroup.Wait()
@@ -1035,6 +1036,7 @@ func getSrcPaths(ctx context.Context, srcPath string, srcVault *vault.Kv2Vault) 
 }
 
 func getMetadataForPaths(
+	ctx context.Context,
 	srcPaths []string,
 	verCount int,
 	srcVault *vault.Kv2Vault,
@@ -1042,7 +1044,7 @@ func getMetadataForPaths(
 	logger := slog.Default()
 	srcCount := len(srcPaths)
 	logger.Info("starting metadata collection", slog.Int("count", srcCount))
-	metaReaderCtx, metaReaderCtxCancel := context.WithTimeout(context.TODO(), 2*time.Hour)
+	metaReaderCtx, metaReaderCtxCancel := context.WithTimeout(ctx, 1*time.Hour)
 	metadataPathSender := NewDataSender(20, 20*time.Millisecond, srcPaths, metaReaderCtx)
 	metadataChan, metaReaderGroup := startMetadataReaders(
 		srcVault,
@@ -1050,10 +1052,7 @@ func getMetadataForPaths(
 		verCount,
 	)
 	go metadataPathSender.Start()
-	secretVerCollector := &ResultCollector[*SecretVersions]{
-		resChan:      metadataChan,
-		collectError: nil,
-	}
+	secretVerCollector := NewResCollector(metaReaderCtx, metadataChan)
 	secretVerCollector.StartCollect("metadata for copy")
 	metaReaderGroup.Wait()
 	metaReaderCtxCancel()
@@ -1083,15 +1082,9 @@ func copyRecords(
 		&copyCtx,
 	)
 	go copySender.Start()
-	failureCollector := &ResultCollector[string]{
-		resChan:      errorChan,
-		collectError: nil,
-	}
+	failureCollector := NewResCollector(copyCtx, errorChan)
 	go failureCollector.StartCollect("paths/versions copy failed")
-	successCollector := &ResultCollector[string]{
-		resChan:      successChan,
-		collectError: nil,
-	}
+	successCollector := NewResCollector(copyCtx, successChan)
 	go successCollector.StartCollect("paths/versions copy succeeded")
 	copierGroup.Wait()
 	copyCtxCancel()
@@ -1115,26 +1108,24 @@ func copyRecords(
 	return successfulPaths, failedPaths, nil
 }
 
-func deleteRecords(removePaths []string, srcVault *vault.Kv2Vault) ([]string, []string, error) {
+func deleteRecords(
+	ctx context.Context,
+	removePaths []string,
+	srcVault *vault.Kv2Vault,
+) ([]string, []string, error) {
 	logger := slog.Default()
 	deleteCount := len(removePaths)
 	logger.Info("starting secret deletion", slog.Int("count", deleteCount))
-	deleteCtx, deleteCtxCancel := context.WithTimeout(context.TODO(), 2*time.Hour)
+	deleteCtx, deleteCtxCancel := context.WithTimeout(ctx, 1*time.Hour)
 	deleteSender := NewDataSender(20, 40*time.Millisecond, removePaths, deleteCtx)
 	go deleteSender.Start()
 	successChan, errorChan, deleteGroup := startDeleteWorkers(
 		srcVault,
 		deleteSender.GetChannel(),
 	)
-	delFailureCollector := &ResultCollector[string]{
-		resChan:      errorChan,
-		collectError: nil,
-	}
+	delFailureCollector := NewResCollector(deleteCtx, errorChan)
 	go delFailureCollector.StartCollect("delete failures")
-	delSuccessCollector := &ResultCollector[string]{
-		resChan:      successChan,
-		collectError: nil,
-	}
+	delSuccessCollector := NewResCollector(deleteCtx, successChan)
 	go delSuccessCollector.StartCollect("paths deleted")
 
 	deleteGroup.Wait()
