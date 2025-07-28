@@ -466,7 +466,7 @@ func MoveSecrets(inputParams *KvParams) {
 		exp, err := regexp.Compile(inputParams.FilterExpStr)
 		if err != nil {
 			logger.Error(
-				"an error occured while copiling path match expr",
+				"an error occured while compiling path match expr",
 				slog.String("error", err.Error()),
 			)
 			duration := time.Since(start)
@@ -971,6 +971,9 @@ func (d *DataSender[T]) Append(newVals []T) {
 }
 
 func (d *DataSender[T]) CheckErr() error {
+	if d.senderErr != nil {
+		return d.senderErr
+	}
 	return nil
 }
 
@@ -1028,6 +1031,11 @@ func getSrcPaths(ctx context.Context, srcPath string, srcVault *vault.Kv2Vault) 
 	go srcPathCollector.StartCollect("paths resolved")
 	srcCollectorGroup.Wait()
 	ProcessCtxCancel()
+	err := pathSender.CheckErr()
+	if err != nil {
+		return nil, fmt.Errorf(
+			"an error occured while processing secret paths: %w", err)
+	}
 	srcPaths, err := srcPathCollector.GetResults()
 	if err != nil {
 		return nil, fmt.Errorf("an error occured while collecting results: %w", err)
@@ -1056,6 +1064,11 @@ func getMetadataForPaths(
 	secretVerCollector.StartCollect("metadata for copy")
 	metaReaderGroup.Wait()
 	metaReaderCtxCancel()
+	err := metadataPathSender.CheckErr()
+	if err != nil {
+		return nil, fmt.Errorf(
+			"an error occured while processing secret metadata: %w", err)
+	}
 	secretVersions, err := secretVerCollector.GetResults()
 	if err != nil {
 		return nil, fmt.Errorf("an error occured while collecting metadata results: %w", err)
@@ -1130,6 +1143,11 @@ func deleteRecords(
 
 	deleteGroup.Wait()
 	deleteCtxCancel()
+	err := deleteSender.CheckErr()
+	if err != nil {
+		return nil, nil, fmt.Errorf(
+			"an error occured while processing secret deletions: %w", err)
+	}
 	delSuccess, err := delSuccessCollector.GetResults()
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to collect successfull deletion results: %w", err)
