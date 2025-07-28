@@ -809,7 +809,7 @@ func getSecretPathsFromPath(
 pathLookup:
 	for {
 		select {
-		case <-(*ctx).Done():
+		case <-ctx.Done():
 			logger.Error("path processor context timeout")
 			break pathLookup
 		case path, ok := <-rcvChan:
@@ -920,8 +920,8 @@ func NewDataSender[T any](
 	return &sender
 }
 
-func (d *DataSender[T]) GetContext() *context.Context {
-	return &d.ctx
+func (d *DataSender[T]) GetContext() context.Context {
+	return d.ctx
 }
 func (d *DataSender[T]) GetChannel() chan T {
 	return d.sendChan
