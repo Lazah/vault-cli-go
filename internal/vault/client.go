@@ -276,7 +276,7 @@ func (c *VaultClient) RenewCurrentToken() (bool, error) {
 	var respCode int
 	var err error
 	expired := currentTime.After(c.sessionToken.exp)
-	aboutToExpire := aboutToExpireTime.After(c.sessionToken.exp)
+
 	if expired {
 		logger.Info(
 			"token has expired... reauthenticating",
@@ -288,6 +288,7 @@ func (c *VaultClient) RenewCurrentToken() (bool, error) {
 			return false, msg
 		}
 	}
+	aboutToExpire := aboutToExpireTime.After(c.sessionToken.exp)
 	if aboutToExpire && c.sessionToken.maxTtl {
 		logger.Info(
 			"token is about to expire & max session ttl has been reached... reauthenticating",
