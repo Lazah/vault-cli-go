@@ -13,7 +13,7 @@ var kvCopyCmd = &cobra.Command{
 	Use:   "copy",
 	Short: "Copies entries between two KV vaults",
 	Long: `Copies entries between two KV vaults that can be hosted on the same server or different server.
-	Also supports copying only certain number of versions`,
+Also supports copying only certain number of versions`,
 	Run: func(cmd *cobra.Command, args []string) {
 		srcMountPath, err := cmd.Flags().GetString("srcMountPath")
 		cobra.CheckErr(err)

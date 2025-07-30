@@ -44,7 +44,7 @@ func init() {
 	// will be global for your application.
 
 	rootCmd.PersistentFlags().
-		StringVar(&cfgFile, "config", "", "config file (default is $HOME/.vault-cli-go.yaml)")
+		StringVar(&cfgFile, "config", "", "config file (default is .vault-cli.yaml or $HOME/.vault-cli.yaml)")
 
 	// Cobra also supports local flags, which will only run
 	// when this action is called directly.
