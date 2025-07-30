@@ -295,7 +295,7 @@ type SecretVersionsToCopy struct {
 func startSecretCopiers(
 	srcVault, dstVault *vault.Kv2Vault,
 	srcChan chan *SecretVersionsToCopy,
-	copyContext *context.Context,
+	copyContext context.Context,
 ) (chan string, chan string, *sync.WaitGroup) {
 	errorChan := make(chan string, 50)
 	successChan := make(chan string, 50)
@@ -328,7 +328,7 @@ func copySecrets(
 	successChan, errorChan chan string,
 	copierGroup *sync.WaitGroup,
 	srcVault, dstVault *vault.Kv2Vault,
-	copyContext *context.Context,
+	copyContext context.Context,
 
 ) {
 	logger := slog.Default()
@@ -336,7 +336,7 @@ func copySecrets(
 copyLoop:
 	for {
 		select {
-		case <-(*copyContext).Done():
+		case <-copyContext.Done():
 			logger.Error("stopping copying: context timeout reached")
 			break copyLoop
 		case secretInfo, ok := <-secretChan:
@@ -861,7 +861,7 @@ collectLoop:
 	for {
 		select {
 		case <-r.ctx.Done():
-			r.collectError = fmt.Errorf("collect context terminated with error: %w", r.ctx.Err())
+			r.collectError = r.ctx.Err()
 			break collectLoop
 
 		case res, ok := <-r.resChan:
@@ -938,7 +938,7 @@ processLoop:
 		}
 		select {
 		case <-d.ctx.Done():
-			d.senderErr = fmt.Errorf("context canceled: %w", d.ctx.Err())
+			d.senderErr = d.ctx.Err()
 			d.operLock.Unlock()
 			break processLoop
 		case <-d.sendTimer.C:
@@ -1092,7 +1092,7 @@ func copyRecords(
 		srcVault,
 		dstVault,
 		copySender.GetChannel(),
-		&copyCtx,
+		copyCtx,
 	)
 	go copySender.Start()
 	failureCollector := NewResCollector(copyCtx, errorChan)
