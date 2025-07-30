@@ -11,13 +11,9 @@ import (
 // kvCopyCmd represents the copy command
 var kvCopyCmd = &cobra.Command{
 	Use:   "copy",
-	Short: "A brief description of your command",
-	Long: `A longer description that spans multiple lines and likely contains examples
-and usage of using your command. For example:
-
-Cobra is a CLI library for Go that empowers applications.
-This application is a tool to generate the needed files
-to quickly create a Cobra application.`,
+	Short: "Copies entries between two KV vaults",
+	Long: `Copies entries between two KV vaults that can be hosted on the same server or different server.
+	Also supports copying only certain number of versions`,
 	Run: func(cmd *cobra.Command, args []string) {
 		srcMountPath, err := cmd.Flags().GetString("srcMountPath")
 		cobra.CheckErr(err)
