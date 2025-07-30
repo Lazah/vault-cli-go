@@ -8,8 +8,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// copyCmd represents the copy command
-var copyCmd = &cobra.Command{
+// kvCopyCmd represents the copy command
+var kvCopyCmd = &cobra.Command{
 	Use:   "copy",
 	Short: "A brief description of your command",
 	Long: `A longer description that spans multiple lines and likely contains examples
@@ -57,7 +57,7 @@ to quickly create a Cobra application.`,
 }
 
 func init() {
-	rootCmd.AddCommand(copyCmd)
+	kvCmd.AddCommand(kvCopyCmd)
 
 	// Here you will define your flags and configuration settings.
 
@@ -68,18 +68,18 @@ func init() {
 	// Cobra supports local flags which will only run when this command
 	// is called directly, e.g.:
 	// copyCmd.Flags().BoolP("toggle", "t", false, "Help message for toggle")
-	copyCmd.Flags().String("srcMountPath", "", "Mount path for source KV2 vault")
-	copyCmd.Flags().String("srcPath", "", "Root key from which to start copy")
-	copyCmd.Flags().
+	kvCopyCmd.Flags().String("srcMountPath", "", "Mount path for source KV2 vault")
+	kvCopyCmd.Flags().String("srcPath", "", "Root key from which to start copy")
+	kvCopyCmd.Flags().
 		Int("keepVersions", -1, "How many versions to copy to new path. Defaults to '-1' to copy all versions")
-	copyCmd.Flags().String("dstMountPath", "", "Mount path for destination KV2 vault")
-	copyCmd.Flags().String("dstPath", "", "Root key to where data is copied to")
-	copyCmd.Flags().Bool("filterPaths", false, "Determines if source paths should be filtered")
-	copyCmd.Flags().String("filterExp", "", "Source path filter as go regexp")
-	copyCmd.MarkFlagsRequiredTogether("filterPaths", "filterExp")
-	copyCmd.Flags().
+	kvCopyCmd.Flags().String("dstMountPath", "", "Mount path for destination KV2 vault")
+	kvCopyCmd.Flags().String("dstPath", "", "Root key to where data is copied to")
+	kvCopyCmd.Flags().Bool("filterPaths", false, "Determines if source paths should be filtered")
+	kvCopyCmd.Flags().String("filterExp", "", "Source path filter as go regexp")
+	kvCopyCmd.MarkFlagsRequiredTogether("filterPaths", "filterExp")
+	kvCopyCmd.Flags().
 		Bool("renameDst", false, "Determines if destination paths should be manipulated")
-	copyCmd.Flags().String("oldPart", "", "What should be replaced from destination path")
-	copyCmd.Flags().String("newPart", "", "New path part")
-	copyCmd.MarkFlagsRequiredTogether("renameDst", "oldPart", "newPart")
+	kvCopyCmd.Flags().String("oldPart", "", "What should be replaced from destination path")
+	kvCopyCmd.Flags().String("newPart", "", "New path part")
+	kvCopyCmd.MarkFlagsRequiredTogether("renameDst", "oldPart", "newPart")
 }
