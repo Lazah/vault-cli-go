@@ -23,6 +23,7 @@ lint:
   disabled:
     - gofmt
   enabled:
+    - taplo@0.9.3
     - bandit@1.8.6
     - black@25.1.0
     - isort@6.0.1
