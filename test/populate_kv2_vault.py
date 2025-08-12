@@ -58,7 +58,9 @@ def write_data_to_vault(entries: dict):
                 "Content-Type": "application/json",
                 "Accept": "application/json",
             }
-            resp = requests.post(url=final_url, headers=headers, data=body_json)
+            resp = requests.post(
+                url=final_url, headers=headers, data=body_json, timeout=60
+            )
             if not resp.ok:
                 print(f"failed to post entry for '{path}'")
 
