@@ -23,14 +23,18 @@ lint:
   disabled:
     - gofmt
   enabled:
+    - bandit@1.8.6
+    - black@25.1.0
+    - isort@6.0.1
+    - ruff@0.12.7
     - golines@0.12.2
-    - checkov@3.2.451
+    - checkov@3.2.461
     - git-diff-check
-    - golangci-lint2@2.2.2
+    - golangci-lint2@2.3.1
     - markdownlint@0.45.0
     - osv-scanner@2.0.3
     - prettier@3.6.2
-    - trufflehog@3.90.0
+    - trufflehog@3.90.3
     - yamllint@1.37.1
 actions:
   enabled:
