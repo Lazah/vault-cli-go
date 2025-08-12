@@ -45,7 +45,7 @@ func CopySecrets(inputParams KvParams) {
 		os.Exit(10)
 	}
 	if cfg.SrcVault == nil {
-		logger.Error("can't perform operation as vault client config is missing")
+		logger.Error("can't perform operation as source vault client config is missing")
 		duration := time.Since(start)
 		logger.Info("process duration", slog.Duration("duration", duration))
 		os.Exit(10)
@@ -53,7 +53,7 @@ func CopySecrets(inputParams KvParams) {
 	logger.Info("initializing source vault client", slog.String("host", cfg.SrcVault.BaseURL))
 	srcVaultClient, err := initVaultClient(cfg.SrcVault)
 	if err != nil {
-		logger.Error("failed to initialize vault client", slog.String("error", err.Error()))
+		logger.Error("failed to initialize source vault client", slog.String("error", err.Error()))
 		duration := time.Since(start)
 		logger.Info("process duration", slog.Duration("duration", duration))
 		os.Exit(10)
@@ -1023,7 +1023,7 @@ func getSrcPaths(ctx context.Context, srcPath string, srcVault *vault.Kv2Vault) 
 	logger := slog.Default()
 	logger.Info("resolving paths for operation")
 	initialInput := []string{srcPath}
-	processCtx, ProcessCtxCancel := context.WithTimeout(ctx, 1*time.Hour)
+	processCtx, ProcessCtxCancel := context.WithTimeout(ctx, 2*time.Hour)
 	pathSender := NewDataSender(20, 40*time.Millisecond, initialInput, processCtx)
 	srcPathChan, srcCollectorGroup := startPathResolveWorkers(srcVault, pathSender)
 	srcPathCollector := NewResCollector(processCtx, srcPathChan)
@@ -1052,7 +1052,7 @@ func getMetadataForPaths(
 	logger := slog.Default()
 	srcCount := len(srcPaths)
 	logger.Info("starting metadata collection", slog.Int("count", srcCount))
-	metaReaderCtx, metaReaderCtxCancel := context.WithTimeout(ctx, 1*time.Hour)
+	metaReaderCtx, metaReaderCtxCancel := context.WithTimeout(ctx, 2*time.Hour)
 	metadataPathSender := NewDataSender(20, 20*time.Millisecond, srcPaths, metaReaderCtx)
 	metadataChan, metaReaderGroup := startMetadataReaders(
 		srcVault,
@@ -1129,7 +1129,7 @@ func deleteRecords(
 	logger := slog.Default()
 	deleteCount := len(removePaths)
 	logger.Info("starting secret deletion", slog.Int("count", deleteCount))
-	deleteCtx, deleteCtxCancel := context.WithTimeout(ctx, 1*time.Hour)
+	deleteCtx, deleteCtxCancel := context.WithTimeout(ctx, 2*time.Hour)
 	deleteSender := NewDataSender(20, 40*time.Millisecond, removePaths, deleteCtx)
 	go deleteSender.Start()
 	successChan, errorChan, deleteGroup := startDeleteWorkers(
