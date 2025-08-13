@@ -1,6 +1,5 @@
 /*
 Copyright © 2025 Pentti Laitinen <pentti.laitinen@gmail.com>
-
 */
 package main
 
