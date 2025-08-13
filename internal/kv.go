@@ -154,7 +154,7 @@ func CopySecrets(inputParams KvParams) {
 	}
 	failureCount := len(copyFails)
 	successCount := len(copySuccess)
-	skipFailurePrint := false
+	var skipFailurePrint bool
 	if len(copyFails) == 0 {
 		skipFailurePrint = true
 	}

@@ -10,12 +10,16 @@ import (
 )
 
 func (k *Kv2Vault) ListPath(secretPath string) ([]string, []string, error) {
+	logger := slog.Default().With("mountPath", k.MountPath, "path", secretPath)
 	escapedSecretPath := escapeRequestPath(secretPath)
 	pathUrl, err := k.MetaDataUrl.Parse(escapedSecretPath)
 	if err != nil {
 		return nil, nil, err
 	}
-	k.checkToken()
+	err = k.checkToken()
+	if err != nil {
+		logger.Warn("token check failed", slog.String("error", err.Error()))
+	}
 	k.operLock.RLock()
 	req := k.VaultClient.apiClient.NewRequest()
 	resp, err := req.Execute("LIST", pathUrl.String())
@@ -142,13 +146,17 @@ func (k *Kv2Vault) checkToken() error {
 }
 
 func (k *Kv2Vault) WriteSecret(path string, val map[string]string) error {
+	logger := slog.Default().With("mountPath", k.MountPath, "path", path)
 	escapedPath := escapeRequestPath(path)
 	reqUrl, err := k.DataUrl.Parse(escapedPath)
 	if err != nil {
 		msg := fmt.Errorf("couldn't parse path %q: %w", escapedPath, err)
 		return msg
 	}
-	k.checkToken()
+	err = k.checkToken()
+	if err != nil {
+		logger.Warn("token check failed", slog.String("error", err.Error()))
+	}
 	k.operLock.RLock()
 	req := k.VaultClient.apiClient.NewRequest()
 	reqBody := make(map[string]any, 0)
@@ -172,13 +180,17 @@ func (k *Kv2Vault) WriteSecret(path string, val map[string]string) error {
 }
 
 func (k *Kv2Vault) GetSecretMetadata(path string) (*Kv2MetadataResp, error) {
+	logger := slog.Default().With("mountPath", k.MountPath, "path", path)
 	escapedPath := escapeRequestPath(path)
 	reqUrl, err := k.MetaDataUrl.Parse(escapedPath)
 	if err != nil {
 		msg := fmt.Errorf("couldn't parse request path %q:%w", escapedPath, err)
 		return nil, msg
 	}
-	k.checkToken()
+	err = k.checkToken()
+	if err != nil {
+		logger.Warn("token check failed", slog.String("error", err.Error()))
+	}
 	k.operLock.RLock()
 	req := k.VaultClient.apiClient.NewRequest()
 	var respBody Kv2MetadataResp

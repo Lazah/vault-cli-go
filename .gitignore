@@ -36,4 +36,4 @@ go.work.sum
 #Config files
 *.yaml
 #Don't ignore trunk
-!.trunk/
+!.trunk/**/*
