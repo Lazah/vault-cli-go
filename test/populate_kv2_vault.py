@@ -36,8 +36,8 @@ def create_data_for_entries(entry_paths: list):
         pws = []
         for _num in range(0, max_entries):
             passwd = "".join(
-                random.choices(string.ascii_letters + string.digits, k=20)
-            )  # nosec
+                random.choices(string.ascii_letters + string.digits, k=20)  # nosec
+            )
             pws.append(passwd)
         res[path] = pws
     return res

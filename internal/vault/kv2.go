@@ -216,6 +216,7 @@ func (k *Kv2Vault) GetSecretMetadata(path string) (*Kv2MetadataResp, error) {
 	return &respBody, nil
 }
 func (k *Kv2Vault) GetSecretVersion(path string, version int) (*Kv2SecretResp, error) {
+	logger := slog.Default().With("mountPath", k.MountPath, "path", path)
 	escapedPath := escapeRequestPath(path)
 	fullPath := fmt.Sprintf("%s?version=%d", escapedPath, version)
 	reqUrl, err := k.DataUrl.Parse(fullPath)
@@ -223,7 +224,10 @@ func (k *Kv2Vault) GetSecretVersion(path string, version int) (*Kv2SecretResp, e
 		msg := fmt.Errorf("couldn't parse path %q: %w", fullPath, err)
 		return nil, msg
 	}
-	k.checkToken()
+	err = k.checkToken()
+	if err != nil {
+		logger.Warn("token check failed", slog.String("error", err.Error()))
+	}
 	k.operLock.RLock()
 	req := k.VaultClient.apiClient.NewRequest()
 	resp, err := req.Get(reqUrl.String())
@@ -245,13 +249,17 @@ func (k *Kv2Vault) GetSecretVersion(path string, version int) (*Kv2SecretResp, e
 	return respBody, nil
 }
 func (k *Kv2Vault) DeletSecret(path string) error {
+	logger := slog.Default().With("mountPath", k.MountPath, "path", path)
 	escapedPath := escapeRequestPath(path)
 	reqUrl, err := k.MetaDataUrl.Parse(escapedPath)
 	if err != nil {
 		msg := fmt.Errorf("couldn't parse requested path '%s': %w", escapedPath, err)
 		return msg
 	}
-	k.checkToken()
+	err = k.checkToken()
+	if err != nil {
+		logger.Warn("token check failed", slog.String("error", err.Error()))
+	}
 	k.operLock.RLock()
 	req := k.VaultClient.apiClient.NewRequest()
 	resp, err := req.Delete(reqUrl.String())
