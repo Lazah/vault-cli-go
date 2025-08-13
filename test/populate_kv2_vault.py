@@ -22,7 +22,7 @@ def create_customer_paths(cust_count: int) -> list[str]:
 
 def add_entry_names_to_customers(names: list[str]) -> list[str]:
     entries = []
-    max_entries = random.randint(1, 200)
+    max_entries = random.randint(1, 200)  # nosec
     for path in names:
         for num in range(1, max_entries + 1):
             entries.append(f"{path}/machine{num}")
@@ -32,10 +32,12 @@ def add_entry_names_to_customers(names: list[str]) -> list[str]:
 def create_data_for_entries(entry_paths: list):
     res = dict()
     for path in entry_paths:
-        max_entries = random.randint(1, 9)
+        max_entries = random.randint(1, 9)  # nosec
         pws = []
         for _num in range(0, max_entries):
-            passwd = "".join(random.choices(string.ascii_letters + string.digits, k=20))
+            passwd = "".join(
+                random.choices(string.ascii_letters + string.digits, k=20)
+            )  # nosec
             pws.append(passwd)
         res[path] = pws
     return res
@@ -52,7 +54,7 @@ def write_data_to_vault(entries: dict):
             data["passwd"] = passwd
             body["data"] = data
             body_json = json.dumps(body)
-            token = ""
+            token = ""  # nosec
             headers = {
                 "Authorization": f"Bearer {token}",
                 "Content-Type": "application/json",
